@@ -1,11 +1,21 @@
 import java.nio.file.{Files, Paths}
 
 
+val archiSrc = "uses.archimate"
+val archiDst = "uses2.archimate" //"../c4enterprise/uses.archimate"
+
 @main
 def main(): Unit =
-  val archi = Archi(Files.readString(Paths.get("/home/ivan/c4repo/c4enterprise/uses.archimate")))
+  val archi = Archi(Files.readString(Paths.get(archiSrc)))
   val nodeByName = archi.nodes.values.map(node => node.name -> node).toMap
-  val projects = archi.nodes.values.filter(_.nodeType == Node.Project).toList
+  //val projects = archi.nodes.values.filter(_.nodeType == Node.Project).toList
+
+  val roadUnitNode = nodeByName("c4.mod.domain.c4roadunit")
+  val srlNode = nodeByName("c4.mod.c4srl.base")
+  val updated = archi.removeRelations(Set(srlNode.id -> roadUnitNode.id))
+  Files.writeString(Paths.get(archiDst), updated.toString)
+
+
 
   /*val List(pathsToDomain, pathsToBase) = List(
     "c4.mod.domain.c4roadunit",
@@ -26,5 +36,7 @@ def main(): Unit =
   println(diff.head)
   println(Archi.NodePath(pathsToDomain(diff.head)))*/
 
-  println(archi.nodes("d76016c8").graphvizChildren)
+  //println(archi.nodes.values.find(_.name == "c4.mod.wtms.c4job").get.children.map(_.name).mkString("\n"))
+
+  //println(archi.nodes.values.find(_.name == "c4.mod.domain.c4roadunit").get.graphvizChildren)
 
