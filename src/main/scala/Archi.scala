@@ -1,9 +1,8 @@
-import scala.xml.{Attribute, Elem, NodeSeq, Null, PrefixedAttribute, XML, Node as XmlNode}
 import Printer.*
 import scalaz.Memo
 
 import scala.collection.View
-import scala.util.Try
+import scala.xml.{Attribute, Elem, NodeSeq, Null, XML, Node as XmlNode}
 
 
 private implicit class SingleElementSeq[T](seq: Seq[T]):
@@ -80,13 +79,12 @@ case class Node(id: String, name: String, nodeType: Node.Type)(_children: => Lis
     case _ => false
 
   protected def allChildren: View[Node] = children.view.flatMap(child => child.allChildren ++ Some(child))
-  def graphvizChildren = {
+  def graphvizChildren: String =
     val lines = for {
       parent <- (this.allChildren ++ Some(this)).toSet.toList
       child <- parent.children
     } yield s"\t\"${child.name}\" -> \"${parent.name}\""
     "digraph G {\n" + lines.mkString("\n") + "\n}"
-  }
 
 case class Dependency(id: String, from: Node, to: Node)
 
@@ -201,9 +199,9 @@ class Archi private(xml: Elem, fileBegin: String):
 
   override def toString: String =
     val orig = xml.toString
-    val fixed1 = fileBegin + orig.substring(orig.indexOf('\n')) + '\n'
-    val fixed2 = fixed1.replaceAll("\\n(\\s*\\n)+", "\n")
-    fixed2
+    val fixedBegin = fileBegin + orig.substring(orig.indexOf('\n')) + '\n'
+    val noEmptyLines = fixedBegin.replaceAll("\\n(\\s*\\n)+", "\n")
+    noEmptyLines
 
 
 object Archi:
