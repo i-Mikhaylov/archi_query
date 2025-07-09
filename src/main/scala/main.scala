@@ -12,7 +12,7 @@ def main(): Unit =
 
   val roadUnitNode = nodeByName("c4.mod.domain.c4roadunit")
   val srlNode = nodeByName("c4.mod.c4srl.base")
-  val updated = archi.removeRelations(Set(srlNode.id -> roadUnitNode.id))
+  val updated = archi.removeDependencies(Set(srlNode.id -> roadUnitNode.id))
   Files.writeString(Paths.get(archiDst), updated.toString)
 
 
