@@ -2,7 +2,7 @@ import java.nio.file.{Files, Paths}
 
 
 val archiSrc = "uses.archimate"
-val archiDst = "uses2.archimate" //"../c4enterprise/uses.archimate"
+val archiDst = "../c4enterprise/uses.archimate"
 
 @main
 def main(): Unit =

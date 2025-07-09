@@ -200,8 +200,10 @@ class Archi private(xml: Elem, fileBegin: String):
 
 
   override def toString: String =
-    val text = xml.toString
-    fileBegin + text.substring(text.indexOf('\n')) + '\n'
+    val orig = xml.toString
+    val fixed1 = fileBegin + orig.substring(orig.indexOf('\n')) + '\n'
+    val fixed2 = fixed1.replaceAll("\\n(\\s*\\n)+", "\n")
+    fixed2
 
 
 object Archi:
