@@ -95,22 +95,21 @@ implicit class NodePath(value: List[Node]):
 
 
 class Archi private(xml: Elem, fileBegin: String):
-  
+
   lazy val nodes: Map[String, Node] =
     def unknowXsiTypeWarning(xsiType: String): Unit = printWarn(s"Unknown application element xsi:type: $xsiType")
     val folders: Folders = Folders(xml)
 
-    val dependencyElements = (folders.dependency \ "element").filter { element =>
-      val xsiType = element.singleGetAttr("xsi:type")
-      val typeValid = xsiType == "archimate:ServingRelationship"
-      if (!typeValid) unknowXsiTypeWarning(xsiType)
-      typeValid
-    }
-    val idByDependency = dependencyElements.map { element =>
-      (element.singleGetAttr("source"), element.singleGetAttr("target")) -> element.singleGetAttr("id")
-    }.toMap
-    val childNodeIds = idByDependency.keys.groupMap(_._2)(_._1)
-    val parentNodeIds = idByDependency.keys.groupMap(_._1)(_._2)
+    val dependencies = (folders.dependency \ "element")
+      .filter { element =>
+        val xsiType = element.singleGetAttr("xsi:type")
+        val typeValid = xsiType == "archimate:ServingRelationship"
+        if (!typeValid) unknowXsiTypeWarning(xsiType)
+        typeValid
+      }
+      .map { element => element.singleGetAttr("source") -> element.singleGetAttr("target") }
+    val childNodeIds = dependencies.groupMap(_._2)(_._1)
+    val parentNodeIds = dependencies.groupMap(_._1)(_._2)
 
     (folders.node \ "element")
       .flatMap { element =>
@@ -131,6 +130,36 @@ class Archi private(xml: Elem, fileBegin: String):
       .withDefault(key => throw Exception(s"Node with key $key element not found"))
 
 
+  type RemoveSC = (Seq[XmlNode], Seq[String])
+
+  private def removeSCInChild(child: XmlNode, relationIds: Set[String]): RemoveSC = child.child.map { grandChild =>
+    val isSourceConnection = grandChild.label == "sourceConnection"
+    if (isSourceConnection && grandChild.singleGetAttr("xsi:type") != "archimate:Connection")
+      throw Exception(s"Found unknow xsi:type: $grandChild")
+    lazy val targetRelation = relationIds contains grandChild.singleGetAttr("archimateRelationship")
+    if (isSourceConnection && targetRelation) Right(grandChild.singleGetAttr("id"))
+    else Left(grandChild)
+  }.partitionMap(identity)
+
+  private def removeSCInElement(element: XmlNode, relationIds: Set[String]): RemoveSC = element.child.flatMap { child =>
+    lazy val (grandChildren, sourceConnectionIds) = child.singleGetAttr("xsi:type") match {
+      case "archimate:DiagramObject" => removeSCInChild(child, relationIds)
+      case "archimate:Group" => removeSCInElement(child, relationIds)
+      case _ => (child.child, Nil)
+    }
+    if (child.label != "child" || sourceConnectionIds.isEmpty) Left(child) :: Nil
+    else Left(child.updateChildren(grandChildren)) :: sourceConnectionIds.map(Right(_)).toList
+  }.partitionMap(identity)
+
+  private def removeSCInFolder(folder: XmlNode, relationIds: Set[String]): RemoveSC = folder.child.flatMap { element =>
+    lazy val (children, sourceConnectionIds) = removeSCInElement(element, relationIds)
+    val isElement = element.label == "element"
+    if (isElement && element.singleGetAttr("xsi:type") != "archimate:ArchimateDiagramModel")
+      throw Exception(s"Found unknown xsi:type: ${element.toString.substring(0, 10000 min element.length)}")
+    if (!isElement || sourceConnectionIds.isEmpty) Left(element) :: Nil
+    else Left(element.updateChildren(children)) :: sourceConnectionIds.map(Right(_)).toList
+  }.partitionMap(identity)
+
   def removeDependencies(dependencies: Set[(String, String)]): Archi =
     val folders: Folders = Folders(xml)
 
@@ -143,29 +172,7 @@ class Archi private(xml: Elem, fileBegin: String):
     val dependencyFolderUpdated = folders.dependency.updateChildren(dependencyElements)
     val relationIds = relationIdSeq.toSet
 
-    val (diagramElements1, sourceConnectionIdSeq) = folders.diagram.child.flatMap { element =>
-      val isElement = element.label == "element"
-      if (isElement && element.singleGetAttr("xsi:type") != "archimate:ArchimateDiagramModel")
-        throw Exception(s"Found unknown xsi:type: ${element.toString.substring(0, 10000 min element.length)}")
-
-      lazy val (children, sourceConnectionIds) = element.child.flatMap { child =>
-        lazy val (grandChildren, sourceConnectionIds) = child.child.map { grandChild =>
-          val isSourceConnection = grandChild.label == "sourceConnection"
-          lazy val targetRelation = relationIds contains grandChild.singleGetAttr("archimateRelationship")
-          if (isSourceConnection && grandChild.singleGetAttr("xsi:type") != "archimate:Connection")
-            throw Exception(s"Found unknow xsi:type: $grandChild")
-          if (isSourceConnection && targetRelation) Right(grandChild.singleGetAttr("id"))
-          else Left(grandChild)
-        }.partitionMap(identity)
-
-        val isTargetChild = child.label == "child" && child.singleGetAttr("xsi:type") == "archimate:DiagramObject"
-        if (!isTargetChild || sourceConnectionIds.isEmpty) Left(child) :: Nil
-        else Left(child.updateChildren(grandChildren)) :: sourceConnectionIds.map(Right(_)).toList
-      }.partitionMap(identity)
-
-      if (!isElement || sourceConnectionIds.isEmpty) Left(element) :: Nil
-      else Left(element.updateChildren(children)) :: sourceConnectionIds.map(Right(_)).toList
-    }.partitionMap(identity)
+    val (diagramElements1, sourceConnectionIdSeq) = removeSCInFolder(folders.diagram, relationIds)
     val sourceConnectionIds = sourceConnectionIdSeq.toSet
 
     val diagramElements2 = diagramElements1.map { element =>
@@ -191,12 +198,12 @@ class Archi private(xml: Elem, fileBegin: String):
     }
     new Archi(xml.updateChildren(foldersUpdated), fileBegin)
 
-  
+
   override def toString: String =
     val text = xml.toString
     fileBegin + text.substring(text.indexOf('\n')) + '\n'
-    
-    
+
+
 object Archi:
   def apply(xml: String): Archi =
     val fileBegin = xml.substring(0, xml.indexOf('\n', xml.indexOf('\n') + 1))
