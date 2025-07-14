@@ -1,33 +1,48 @@
 import java.nio.file.{Files, Paths}
 
 
-val archiSrc = "uses.archimate"
-val archiDst = "../c4enterprise/uses.archimate"
+private val archiSrc = "uses.archimate"
+private val archiDst = "../c4enterprise/uses.archimate"
 
-val toRemoveDependencies: List[(String, String)] = List(
+private val toRemoveDependencies = List(
   "c4.mod.c4srl.base" -> "c4.mod.domain.c4roadunit",
+  "c4.mod.c4srl.base" -> "c4.mod.domain.c4cnt.base",
   "c4.mod.domain.c4decision" -> "c4.mod.domain.c4roadunit",
   "c4.mod.domain.c4decision" -> "c4.mod.domain.c4cnt.base",
 )
+private val toAddDependencies = List(
+  "c4.mod.domain.c4techflow" -> "c4.mod.domain.c4cnt.base",
+)
 
 
-@main
-def main(): Unit =
+private val archi = Archi(Files.readString(Paths.get(archiSrc)))
+private val rich = ArchiRich(archi)
+private val byName = rich.nodeByName
+
+
+def rewrite(): Unit =
   val archi = Archi(Files.readString(Paths.get(archiSrc)))
   val rich = ArchiRich(archi)
+  val byName = rich.nodeByName
 
-  val module1 = "c4.mod.domain.c4roadunit"
+  val toRemoveIds = toRemoveDependencies
+    .map((fromName, toName) => byName(fromName).id -> byName(toName).id)
+  val toAddIds = toAddDependencies
+    .map((fromName, toName) => byName(fromName).id -> byName(toName).id)
+  val updated = archi.removeDependencies(toRemoveIds.toSet).addDependencies(toAddIds)
+  Files.writeString(Paths.get(archiDst), updated.toString)
+
+
+
+@main def main(): Unit =
+  rewrite()
+
+  /*val module1 = "c4.mod.domain.c4roadunit"
   val module2 = "c4.cargo.c4roadunit.base"
-  val (diff1, diff2) = rich.moduleProjectDiff(module1, module2)
-  println(diff1.map(_.head.name))
-  println(diff2.map(_.head.name))
+  println(rich.moduleProjectDiff(module1, module2))*/
 
-  /*val toRemoveIds = toRemoveDependencies
-    .map((fromName, toName) => nodeByName(fromName).id -> nodeByName(toName).id)
-    .toSet
-  val updated = archi.removeDependencies(toRemoveIds)
-  Files.writeString(Paths.get(archiDst), updated.toString)*/
 
+  //println(Node.pathToChild(byName("c4.mod.domain.c4techflow").id)(byName("c4.mod.domain.c4cnt.base")).beautifulString)
 
 
   //println(archi.nodes.values.find(_.name == "c4.mod.wtms.c4job").get.children.map(_.name).mkString("\n"))

@@ -2,7 +2,8 @@ import Printer.*
 import scalaz.Memo
 
 import scala.collection.View
-import scala.xml.{Attribute, Elem, NodeSeq, Null, XML, Node as XmlNode}
+import scala.util.{Random, Try}
+import scala.xml.{Attribute, Elem, NodeSeq, Null, Text, XML, Node as XmlNode}
 
 
 private implicit class SingleElementSeq[T](seq: Seq[T]):
@@ -50,6 +51,22 @@ private class Folders(xml: Elem):
   lazy val dependency: XmlNode = apply("relations")
   lazy val node: XmlNode = apply("application")
   lazy val diagram: XmlNode = apply("diagrams")
+
+  def update(
+    dependency: Option[XmlNode] = None,
+    node: Option[XmlNode] = None,
+    diagram: Option[XmlNode] = None,
+  ): Elem =
+    val updateMap = {
+      dependency.map("relations" -> _).toList :::
+      node.map("application" -> _).toList :::
+      diagram.map("diagrams" -> _).toList
+    }.toMap
+    xml updateChildren xml.child.map { folder =>
+      Option.when(folder.label == "folder")(folder.singleGetAttr("type"))
+        .flatMap(updateMap.get)
+        .getOrElse(folder)
+    }
 
 
 object Node:
@@ -186,16 +203,33 @@ class Archi private(xml: Elem, fileBegin: String):
     }
     val diagramFolderUpdated = folders.diagram.updateChildren(diagramElements2)
 
-    val foldersUpdated = xml.child.map { folder =>
-      if (folder.label != "folder") folder
-      else folder.singleGetAttr("type") match {
-        case "relations" => dependencyFolderUpdated
-        case "diagrams" => diagramFolderUpdated
-        case _ => folder
-      }
-    }
-    new Archi(xml.updateChildren(foldersUpdated), fileBegin)
+    val updatedXml = folders.update(dependency = Some(dependencyFolderUpdated), diagram = Some(diagramFolderUpdated))
+    new Archi(updatedXml, fileBegin)
 
+  def addDependencies(dependencies: Iterable[(String, String)]): Archi =
+    val folders: Folders = Folders(xml)
+
+    val existingIds = (folders.dependency \ "element")
+      .map(_.singleGetAttr("id"))
+      .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
+      .toSet
+    def generateId = LazyList.continually(Archi.random.nextInt)
+      .dropWhile(existingIds.contains)
+      .map(id => f"$id%08x")
+      .head
+
+    val texts = folders.dependency.child.reverseIterator.filter(_.isInstanceOf[Text])
+    val lastNewLine = texts.next
+    val newLine = texts.next
+
+    val updatedChildren = folders.dependency.child.drop(1) ++ dependencies.flatMap { case (from, to) =>
+      newLine ::
+      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
+      Nil
+    } ++ lastNewLine
+    val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)
+    val updatedXml = folders.update(dependency = Some(updatedDependencyFolder))
+    new Archi(updatedXml, fileBegin)
 
   override def toString: String =
     val orig = xml.toString
@@ -205,6 +239,8 @@ class Archi private(xml: Elem, fileBegin: String):
 
 
 object Archi:
+  private val random = new Random(123456789123456789L)
+
   def apply(xml: String): Archi =
     val fileBegin = xml.substring(0, xml.indexOf('\n', xml.indexOf('\n') + 1))
     new Archi(XML.loadString(xml), fileBegin)
