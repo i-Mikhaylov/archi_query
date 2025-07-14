@@ -84,28 +84,28 @@ object Node:
         .getOrElse(Nil)
     }
     memo
-  def pathToChild(childId: String): Node => List[Node] = pathTo(_.children, childId)
-  def pathToParent(childId: String): Node => List[Node] = pathTo(_.parents, childId)
+  def pathToSource(childId: String): Node => List[Node] = pathTo(_.sources, childId)
+  def pathToTarget(childId: String): Node => List[Node] = pathTo(_.targets, childId)
 
-case class Node(id: String, name: String, nodeType: Node.Type)(_children: => List[Node], _parents: => List[Node]):
-  def children: List[Node] = _children
-  def parents: List[Node] = _parents
+case class Node(id: String, name: String, nodeType: Node.Type)(_sources: => List[Node], _targets: => List[Node]):
+  def sources: List[Node] = _sources
+  def targets: List[Node] = _targets
   override def hashCode: Int = id.hashCode
   override def equals(obj: Any): Boolean = obj match
     case Node(otherId, _, _) => otherId == id
     case _ => false
 
-  protected def allChildren: View[Node] = children.view.flatMap(child => child.allChildren ++ Some(child))
-  def graphvizChildren: String =
+  protected def allSources: View[Node] = sources.view.flatMap(child => child.allSources ++ Some(child))
+  def graphvizSources: String =
     val lines = for {
-      parent <- (this.allChildren ++ Some(this)).toSet.toList
-      child <- parent.children
-    } yield s"\t\"${child.name}\" -> \"${parent.name}\""
+      node <- (this.allSources ++ Some(this)).toSet.toList
+      source <- node.sources
+    } yield s"\t\"${source.name}\" -> \"${node.name}\""
     "digraph G {\n" + lines.mkString("\n") + "\n}"
 
 case class Dependency(id: String, from: Node, to: Node)
 
-implicit class NodePath(value: List[Node]):
+implicit class BeautifulNodePath(value: List[Node]):
   def beautifulString: String = value.map(_.name).mkString(" <- ")
 
 
@@ -123,8 +123,8 @@ class Archi private(xml: Elem, fileBegin: String):
         typeValid
       }
       .map { element => element.singleGetAttr("source") -> element.singleGetAttr("target") }
-    val childNodeIds = dependencies.groupMap(_._2)(_._1)
-    val parentNodeIds = dependencies.groupMap(_._1)(_._2)
+    val sourceNodeIds = dependencies.groupMap(_._2)(_._1)
+    val targetNodeIds = dependencies.groupMap(_._1)(_._2)
 
     (folders.node \ "element")
       .flatMap { element =>
@@ -137,9 +137,9 @@ class Archi private(xml: Elem, fileBegin: String):
       .map { case (element, elementType) =>
         val id = element.singleGetAttr("id")
         val name = element.singleGetAttr("name")
-        lazy val children = childNodeIds.getOrElse(id, Nil).map(nodes).toList
-        lazy val parents = parentNodeIds.getOrElse(id, Nil).map(nodes).toList
-        id -> Node(id, name, elementType)(children, parents)
+        lazy val sources = sourceNodeIds.getOrElse(id, Nil).map(nodes).toList
+        lazy val targets = targetNodeIds.getOrElse(id, Nil).map(nodes).toList
+        id -> Node(id, name, elementType)(sources, targets)
       }
       .toMap
       .withDefault(key => throw Exception(s"Node with key $key element not found"))

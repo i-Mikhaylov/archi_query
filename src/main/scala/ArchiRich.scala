@@ -13,7 +13,7 @@ case class ArchiRich(archi: Archi):
   lazy val projects: List[Node] = archi.nodes.values.filter(_.nodeType == Node.Project).toList
 
   def getModuleProjectPaths(moduleName: String): List[NodePath] =
-    val getPath = Node.pathToChild(nodeByName(moduleName).id)
+    val getPath = Node.pathToSource(nodeByName(moduleName).id)
     projects.map(getPath).filter(_.nonEmpty)
 
   def moduleProjectDiff(moduleName1: String, moduleName2: String): ModuleProjectDiff =

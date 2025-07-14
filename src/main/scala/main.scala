@@ -9,15 +9,14 @@ private val toRemoveDependencies = List(
   "c4.mod.c4srl.base" -> "c4.mod.domain.c4cnt.base",
   "c4.mod.domain.c4decision" -> "c4.mod.domain.c4roadunit",
   "c4.mod.domain.c4decision" -> "c4.mod.domain.c4cnt.base",
+
+  "c4.cargo.base" -> "c4.mod.domain.c4maficargo",
 )
 private val toAddDependencies = List(
   "c4.mod.domain.c4techflow" -> "c4.mod.domain.c4cnt.base",
 )
 
 
-private val archi = Archi(Files.readString(Paths.get(archiSrc)))
-private val rich = ArchiRich(archi)
-private val byName = rich.nodeByName
 
 
 def rewrite(): Unit =
