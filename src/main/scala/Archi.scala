@@ -70,10 +70,6 @@ private class Folders(xml: Elem):
 
 
 object Node:
-  sealed trait Type
-  object Module extends Type
-  object Project extends Type
-
   private def pathTo(getTarget: Node => List[Node], targetId: String): Node => List[Node] =
     lazy val memo: Node => List[Node] = Memo.mutableHashMapMemo { node =>
       if (node.id == targetId) node :: Nil
@@ -87,7 +83,7 @@ object Node:
   def pathToSource(childId: String): Node => List[Node] = pathTo(_.sources, childId)
   def pathToTarget(childId: String): Node => List[Node] = pathTo(_.targets, childId)
 
-case class Node(id: String, name: String, nodeType: Node.Type)(_sources: => List[Node], _targets: => List[Node]):
+case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):
   def sources: List[Node] = _sources
   def targets: List[Node] = _targets
   override def hashCode: Int = id.hashCode
@@ -129,17 +125,17 @@ class Archi private(xml: Elem, fileBegin: String):
     (folders.node \ "element")
       .flatMap { element =>
         element.singleGetAttr("xsi:type") match {
-          case "archimate:ApplicationFunction" => Some(element -> Node.Module)
-          case "archimate:ApplicationComponent" => Some(element -> Node.Project)
+          case "archimate:ApplicationFunction" => Some(element -> false)
+          case "archimate:ApplicationComponent" => Some(element -> true)
           case unknownType => unknowXsiTypeWarning(unknownType); None
         }
       }
-      .map { case (element, elementType) =>
+      .map { case (element, isProject) =>
         val id = element.singleGetAttr("id")
         val name = element.singleGetAttr("name")
         lazy val sources = sourceNodeIds.getOrElse(id, Nil).map(nodes).toList
         lazy val targets = targetNodeIds.getOrElse(id, Nil).map(nodes).toList
-        id -> Node(id, name, elementType)(sources, targets)
+        id -> Node(id, name, isProject)(sources, targets)
       }
       .toMap
       .withDefault(key => throw Exception(s"Node with key $key element not found"))

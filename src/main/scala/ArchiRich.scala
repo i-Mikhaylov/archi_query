@@ -10,7 +10,7 @@ case class ModuleProjectDiff(diff1: List[NodePath], diff2: List[NodePath], name1
 
 case class ArchiRich(archi: Archi):
   lazy val nodeByName: Map[String, Node] = archi.nodes.values.map(node => node.name -> node).toMap
-  lazy val projects: List[Node] = archi.nodes.values.filter(_.nodeType == Node.Project).toList
+  lazy val projects: List[Node] = archi.nodes.values.filter(_.isProject).toList
 
   def getModuleProjectPaths(moduleName: String): List[NodePath] =
     val getPath = Node.pathToSource(nodeByName(moduleName).id)
