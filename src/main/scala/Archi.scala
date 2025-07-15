@@ -102,7 +102,9 @@ case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[
 case class Dependency(id: String, from: Node, to: Node)
 
 implicit class BeautifulNodePath(value: List[Node]):
-  def beautifulString: String = value.map(_.name).mkString(" <- ")
+  def beautifulString: String =
+    if (value.nonEmpty) value.map(_.name).mkString(" <- ")
+    else "No path"
 
 
 class Archi private(xml: Elem, fileBegin: String):
@@ -139,6 +141,28 @@ class Archi private(xml: Elem, fileBegin: String):
       }
       .toMap
       .withDefault(key => throw Exception(s"Node with key $key element not found"))
+
+
+  def addModules(names: Iterable[String]): Archi =
+    val folders: Folders = Folders(xml)
+
+    val existingIds = (folders.node \ "element")
+      .map(_.singleGetAttr("id"))
+      .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
+      .toSet
+
+    val texts = folders.node.child.reverseIterator.filter(_.isInstanceOf[Text])
+    val lastNewLine = texts.next
+    val newLine = texts.next
+
+    val updatedChildren = folders.node.child.dropRight(1) ++ names.flatMap { name =>
+      newLine ::
+      <element xsi:type="archimate:ApplicationFunction" name={name} id={Archi.generateId(existingIds)}/> ::
+      Nil
+    } ++ lastNewLine
+    val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
+    val updatedXml = folders.update(node = Some(updatedNodeFolder))
+    new Archi(updatedXml, fileBegin)
 
 
   type RemoveSC = (Seq[XmlNode], Seq[String])
@@ -209,10 +233,6 @@ class Archi private(xml: Elem, fileBegin: String):
       .map(_.singleGetAttr("id"))
       .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
       .toSet
-    def generateId = LazyList.continually(Archi.random.nextInt)
-      .dropWhile(existingIds.contains)
-      .map(id => f"$id%08x")
-      .head
 
     val texts = folders.dependency.child.reverseIterator.filter(_.isInstanceOf[Text])
     val lastNewLine = texts.next
@@ -220,7 +240,7 @@ class Archi private(xml: Elem, fileBegin: String):
 
     val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.flatMap { case (from, to) =>
       newLine ::
-      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
+      <element xsi:type="archimate:ServingRelationship" id={Archi.generateId(existingIds)} source={from} target={to}/> ::
       Nil
     } ++ lastNewLine
     val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)
@@ -236,6 +256,11 @@ class Archi private(xml: Elem, fileBegin: String):
 
 object Archi:
   private val random = new Random(123456789123456789L)
+  private def generateId(existing: Set[Int]) =
+    LazyList.continually(Archi.random.nextInt)
+      .dropWhile(existing.contains)
+      .map(id => f"$id%08x")
+      .head
 
   def apply(xml: String): Archi =
     val fileBegin = xml.substring(0, xml.indexOf('\n', xml.indexOf('\n') + 1))
