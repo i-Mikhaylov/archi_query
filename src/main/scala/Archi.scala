@@ -163,15 +163,11 @@ class Archi private(
 
   def addModules(names: Iterable[String]): Archi =
     val folders: Folders = Folders(xml)
-    val texts = folders.node.child.reverseIterator.filter(_.isInstanceOf[Text])
-    val lastNewLine = texts.next
-    val newLine = texts.next
-
     val updatedChildren = folders.node.child.dropRight(1) ++ names.flatMap { name =>
-      newLine ::
+      Text("\n    ") ::
       <element xsi:type="archimate:ApplicationFunction" name={name} id={generateId}/> ::
       Nil
-    } ++ lastNewLine
+    } ++ Text("\n  ")
     val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
     val updatedXml = folders.update(node = Some(updatedNodeFolder))
     new Archi(updatedXml, fileBegin, random)
@@ -238,23 +234,13 @@ class Archi private(
     val updatedXml = folders.update(dependency = Some(dependencyFolderUpdated), diagram = Some(diagramFolderUpdated))
     new Archi(updatedXml, fileBegin, random)
 
-  def addDependencies(dependencies: Iterable[(String, String)]): Archi =
+  def addDependencies(dependencies: Seq[(String, String)]): Archi =
     val folders: Folders = Folders(xml)
-
-    val existingIds = (folders.dependency \ "element")
-      .map(_.singleGetAttr("id"))
-      .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
-      .toSet
-
-    val texts = folders.dependency.child.reverseIterator.filter(_.isInstanceOf[Text])
-    val lastNewLine = texts.next
-    val newLine = texts.next
-
     val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.flatMap { case (from, to) =>
-      newLine ::
+      Text("\n    ") ::
       <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
       Nil
-    } ++ lastNewLine
+    } ++ Text("\n  ")
     val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)
     val updatedXml = folders.update(dependency = Some(updatedDependencyFolder))
     new Archi(updatedXml, fileBegin, random)
