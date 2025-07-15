@@ -80,7 +80,7 @@ object Node:
         .getOrElse(Nil)
     }
     memo
-  def pathToSource(sourceId: String): Node => List[Node] = pathTo(_.sources, sourceId)
+  def pathToSource(sourceId: String): Node => List[Node] = pathTo(_.sources, sourceId).andThen(_.reverse)
   def pathToTarget(targetId: String): Node => List[Node] = pathTo(_.targets, targetId)
 
 case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):
@@ -103,11 +103,15 @@ case class Dependency(id: String, from: Node, to: Node)
 
 implicit class BeautifulNodePath(value: List[Node]):
   def beautifulString: String =
-    if (value.nonEmpty) value.map(_.name).mkString(" <- ")
+    if (value.nonEmpty) value.map(_.name).mkString(" -> ")
     else "No path"
 
 
-class Archi private(xml: Elem, fileBegin: String):
+class Archi private(
+  xml: Elem,
+  fileBegin: String,
+  random: Random = new Random(123456789123456789L),
+):
 
   lazy val nodes: Map[String, Node] =
     def unknowXsiTypeWarning(xsiType: String): Unit = printWarn(s"Unknown application element xsi:type: $xsiType")
@@ -143,26 +147,34 @@ class Archi private(xml: Elem, fileBegin: String):
       .withDefault(key => throw Exception(s"Node with key $key element not found"))
 
 
+  private def getIds(elem: Elem): Seq[String] =
+    (elem \ "@id").map(_.text) ++ elem.child.flatMap {
+      case elem: Elem => getIds(elem)
+      case _ => Nil
+    }
+  private lazy val existingIds: Set[Int] = getIds(xml)
+    .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
+    .toSet
+  private def generateId =
+    LazyList.continually(random.nextInt)
+      .dropWhile(existingIds.contains)
+      .map(id => f"$id%08x")
+      .head
+
   def addModules(names: Iterable[String]): Archi =
     val folders: Folders = Folders(xml)
-
-    val existingIds = (folders.node \ "element")
-      .map(_.singleGetAttr("id"))
-      .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
-      .toSet
-
     val texts = folders.node.child.reverseIterator.filter(_.isInstanceOf[Text])
     val lastNewLine = texts.next
     val newLine = texts.next
 
     val updatedChildren = folders.node.child.dropRight(1) ++ names.flatMap { name =>
       newLine ::
-      <element xsi:type="archimate:ApplicationFunction" name={name} id={Archi.generateId(existingIds)}/> ::
+      <element xsi:type="archimate:ApplicationFunction" name={name} id={generateId}/> ::
       Nil
     } ++ lastNewLine
     val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
     val updatedXml = folders.update(node = Some(updatedNodeFolder))
-    new Archi(updatedXml, fileBegin)
+    new Archi(updatedXml, fileBegin, random)
 
 
   type RemoveSC = (Seq[XmlNode], Seq[String])
@@ -224,7 +236,7 @@ class Archi private(xml: Elem, fileBegin: String):
     val diagramFolderUpdated = folders.diagram.updateChildren(diagramElements2)
 
     val updatedXml = folders.update(dependency = Some(dependencyFolderUpdated), diagram = Some(diagramFolderUpdated))
-    new Archi(updatedXml, fileBegin)
+    new Archi(updatedXml, fileBegin, random)
 
   def addDependencies(dependencies: Iterable[(String, String)]): Archi =
     val folders: Folders = Folders(xml)
@@ -240,12 +252,12 @@ class Archi private(xml: Elem, fileBegin: String):
 
     val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.flatMap { case (from, to) =>
       newLine ::
-      <element xsi:type="archimate:ServingRelationship" id={Archi.generateId(existingIds)} source={from} target={to}/> ::
+      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
       Nil
     } ++ lastNewLine
     val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)
     val updatedXml = folders.update(dependency = Some(updatedDependencyFolder))
-    new Archi(updatedXml, fileBegin)
+    new Archi(updatedXml, fileBegin, random)
 
   override def toString: String =
     val orig = xml.toString
@@ -255,13 +267,6 @@ class Archi private(xml: Elem, fileBegin: String):
 
 
 object Archi:
-  private val random = new Random(123456789123456789L)
-  private def generateId(existing: Set[Int]) =
-    LazyList.continually(Archi.random.nextInt)
-      .dropWhile(existing.contains)
-      .map(id => f"$id%08x")
-      .head
-
   def apply(xml: String): Archi =
     val fileBegin = xml.substring(0, xml.indexOf('\n', xml.indexOf('\n') + 1))
     new Archi(XML.loadString(xml), fileBegin)
