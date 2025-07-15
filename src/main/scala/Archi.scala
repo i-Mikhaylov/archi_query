@@ -70,18 +70,18 @@ private class Folders(xml: Elem):
 
 
 object Node:
-  private def pathTo(getTarget: Node => List[Node], targetId: String): Node => List[Node] =
+  private def pathTo(getNext: Node => List[Node], keyId: String): Node => List[Node] =
     lazy val memo: Node => List[Node] = Memo.mutableHashMapMemo { node =>
-      if (node.id == targetId) node :: Nil
-      else getTarget(node).view
+      if (node.id == keyId) node :: Nil
+      else getNext(node).view
         .map(memo)
         .find(_.nonEmpty)
         .map(node :: _)
         .getOrElse(Nil)
     }
     memo
-  def pathToSource(childId: String): Node => List[Node] = pathTo(_.sources, childId)
-  def pathToTarget(childId: String): Node => List[Node] = pathTo(_.targets, childId)
+  def pathToSource(sourceId: String): Node => List[Node] = pathTo(_.sources, sourceId)
+  def pathToTarget(targetId: String): Node => List[Node] = pathTo(_.targets, targetId)
 
 case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):
   def sources: List[Node] = _sources
@@ -218,7 +218,7 @@ class Archi private(xml: Elem, fileBegin: String):
     val lastNewLine = texts.next
     val newLine = texts.next
 
-    val updatedChildren = folders.dependency.child.drop(1) ++ dependencies.flatMap { case (from, to) =>
+    val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.flatMap { case (from, to) =>
       newLine ::
       <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
       Nil
