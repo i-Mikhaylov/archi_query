@@ -1,5 +1,3 @@
-import scalaz.Memo
-
 import scala.collection.View
 
 /*

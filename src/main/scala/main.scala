@@ -1,8 +1,5 @@
-import scalaz.Memo
-
 import java.nio.file.{Files, Paths}
 import scala.annotation.tailrec
-import scala.collection.{View, mutable}
 
 
 private val archiSrc = "renamed.archimate"
@@ -13,10 +10,10 @@ private val toAddModules = List[String](
 )
 
 private val toRemoveDependencies = List[(String, String)](
-  //toMain:
+  //modToMain:
   //"c4.cargo.operationalparameters" -> "c4.cargo.base",        to the end (too many deps but I need to try)
 
-  //mainToDomain:
+  //mainToModDomain:
   "c4.cargo.base" -> "c4.mod.domain.c4maficargo",
   "c4.cargo.base" -> "c4.mod.domain.tug",
   /*"c4.cargo.decision" -> "c4.mod.domain.c4cnt.base",          mb divide and move some part to domain?
@@ -35,16 +32,18 @@ private val toRemoveDependencies = List[(String, String)](
   "c4.mod.domain.c4placement" -> "c4.mod.domain.c4roadunit",
   //"c4.mod.domain.c4placement" -> "c4.mod.domain.rwcar_base",  merge domain.rwcar_base into cargo.rwcar ?
 
-  //mainToCargo:
+  //mainToModCargo:
   "c4.mod.c4srl.base" -> "c4.cargo.c4gencargo",
-  "c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",//       to the end
+  //"c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",       depends hardly
   "c4.mod.c4srl.base" -> "c4.cargo.oogresolution",
 
-  //modToDomain:
+  //modToModDomain:
   "c4.cargo.imo" -> "c4.mod.domain.c4cnt.base",
 
-  //modCargoToCargo:
+  //modToModCargo:
   "c4.cargo.c4container.base" -> "c4.cargo.tiers_in_bundle",
+  //"c4.mod.wtms.c4bulkcargo" -> "c4.cargo.c4customs",          depends hardly
+  "c4.mod.wtms.c4docker.gencargo" -> "c4.cargo.tiers_in_bundle",
 )
 private val toAddDependencies = List[(String, String)](
   "c4.mod.domain.c4techflow" -> "c4.mod.domain.c4cnt.base",
@@ -54,6 +53,7 @@ private val toAddDependencies = List[(String, String)](
   "c4.cargo.strategy" -> "c4.cargo.c4gencargo",
   "c4.cargo.withdraw" -> "c4.cargo.c4gencargo",
   "c4.cargo.decision" -> "c4.cargo.imoresolution.base",
+  "c4.mod.domain.c4cargospec.images" -> "c4.mod.domain.c4truckcallreport",
 )
 
 
@@ -85,11 +85,16 @@ def printInvalid(): Unit =
   val nodes = dstArchi.byId.values
   def byName(names: String*) = names.map(dstArchi.byName)
 
+  def sourceFilter(src: Iterable[Node], filter: Node => Boolean) = for
+    node <- src.view
+    source <- node.sources
+    if filter(source)
+  yield source -> node
+
   val mainDomain = byName("c4.core.inheritance", "c4.mod.domain.cargo")
-  val mainCargo = byName("c4.mod.domain.c4placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw")
+  val mainCargo = byName("c4.mod.domain.c4placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw").toSet
   val mainSrl = byName("c4.mod.c4srl.base", "c4.mod.wtms.c4cargo")
-  val mainCargoSrl = (mainCargo ++ mainSrl).toSet
-  val allMain = mainCargoSrl ++ mainDomain
+  val allMain = mainCargo ++ mainSrl ++ mainDomain
 
   val modDomain = byName(
     "c4.mod.domain.breakbulkcargo",
@@ -103,38 +108,31 @@ def printInvalid(): Unit =
 
     "c4.mod.domain.railway",
   ).toSet
-  val modCargo = nodes.filter(node => node.name.startsWith("c4.cargo") && !modDomain.contains(node) && !allMain.contains(node))
-  val mod = modDomain ++ modCargo
+  val modCargo = nodes.filter(node => node.name.startsWith("c4.cargo") && !modDomain.contains(node) && !allMain.contains(node)).toSet
+  val modWtms = byName(
+    "c4.mod.wtms.c4bulkcargo",
+    "c4.mod.wtms.c4vessel.cnt",
+    "c4.mod.wtms.c4accessibility.cnt",
+    "c4.mod.wtms.c4docker.forcemove.gencargo",
+    "c4.mod.wtms.c4docker.gencargo",
+    "c4.mod.wtms.c4docker.location.correction.gencargo",
+    "c4.mod.wtms.c4maficargo",
+    "c4.mod.wtms.c4perscar",
+    "c4.mod.wtms.c4railway",
+  ).toSet
+  val mod = modDomain ++ modCargo ++ modWtms
 
-  def targetFilter(src: Iterable[Node], filter: Node => Boolean) = for {
-    node <- src.view
-    target <- node.targets
-    if filter(target)
-  } yield node -> target
-  def sourceFilter(src: Iterable[Node], filter: Node => Boolean) = for {
-    node <- src
-    source <- node.sources
-    if filter(source)
-  } yield source -> node
+  val modToMain       = sourceFilter(allMain,   mod.contains)
+  val mainToModDomain = sourceFilter(modDomain, (mainCargo ++ mainSrl).contains)
+  val mainToModCargo  = sourceFilter(modCargo,  mainSrl.contains)
+  val modToModDomain  = sourceFilter(modDomain, mod.contains)
+  val modToModCargo   = sourceFilter(modCargo,  (modCargo ++ modWtms).contains)
 
-  val toMain = targetFilter(mod, allMain.contains)
-  val mainToDomain = sourceFilter(modDomain, mainCargoSrl.contains)
-  val mainToCargo = sourceFilter(modCargo, mainSrl.contains)
-  val modToDomain = sourceFilter(modDomain, mod.contains)
-  val modCargoToCargo = sourceFilter(modCargo, modCargo.toSet.contains)
-
-  def print(name: String, dependencies: Iterable[(Node, Node)]): Unit =
-    println(s"\n//$name:")
-    dependencies
-      .map((source, target) => s"""//"${source.name}" -> "${target.name}",""")
-      .toList
-      .sorted
-      .foreach(println)
-  print("toMain",           toMain)
-  print("mainToDomain",     mainToDomain)
-  print("mainToCargo",      mainToCargo)
-  print("modToDomain",      modToDomain)
-  print("modCargoToCargo",  modCargoToCargo)
+  (modToMain ++ mainToModDomain ++ mainToModCargo ++ modToModDomain ++ modToModCargo)
+    .map((source, target) => s"""//"${source.name}" -> "${target.name}",""")
+    .toList
+    .sorted
+    .foreach(println)
 
 
 def printProjectsDiff(): Unit =
@@ -178,9 +176,8 @@ def rewrite(): Unit =
   import srcArchi.nameToNode
 
   //println(srcArchi.moduleProjectDiff("c4.mod.domain.rwcar", "c4.mod.domain.rwcar_base"))
-  srcArchi.getPath("c4.mod.domain.rwcar_base", "c4.proj.tcs.bkp").foreach(println)
-  //println(Node.pathToSource(dstArchi.nodeByName("c4.mod.domain.rwcar_base").id)(dstArchi.nodeByName("c4.proj.tcs.bkp")).beautifulString)
-  //printModuleProjects("c4.cargo.rwcar")
+  //srcArchi.getPath("c4.mod.domain.c4cargospec.images", "c4.mod.domain.c4truckcallreport").foreach(println)
+  //printModuleProjects("c4.cargo.oogresolution")
   //findPrintModules("service")
-  //rewrite();  printProjectsDiff()
-  //printInvalid()
+  rewrite();  printProjectsDiff()
+  printInvalid()
