@@ -1,7 +1,8 @@
 import Printer.*
 import scalaz.Memo
 
-import scala.collection.View
+import scala.annotation.tailrec
+import scala.language.implicitConversions
 import scala.util.{Random, Try}
 import scala.xml.{Attribute, Elem, NodeSeq, Null, Text, XML, Node as XmlNode}
 
@@ -69,51 +70,13 @@ private class Folders(xml: Elem):
     }
 
 
-object Node:
-  private def pathTo(getNext: Node => List[Node], keyId: String): Node => List[Node] =
-    lazy val memo: Node => List[Node] = Memo.mutableHashMapMemo { node =>
-      if (node.id == keyId) node :: Nil
-      else getNext(node).view
-        .map(memo)
-        .find(_.nonEmpty)
-        .map(node :: _)
-        .getOrElse(Nil)
-    }
-    memo
-  def pathToSource(sourceId: String): Node => List[Node] = pathTo(_.sources, sourceId).andThen(_.reverse)
-  def pathToTarget(targetId: String): Node => List[Node] = pathTo(_.targets, targetId)
-
-case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):
-  def sources: List[Node] = _sources
-  def targets: List[Node] = _targets
-  override def hashCode: Int = id.hashCode
-  override def equals(obj: Any): Boolean = obj match
-    case Node(otherId, _, _) => otherId == id
-    case _ => false
-
-  protected def allSources: View[Node] = sources.view.flatMap(child => child.allSources ++ Some(child))
-  def graphvizSources: String =
-    val lines = for {
-      node <- (this.allSources ++ Some(this)).toSet.toList
-      source <- node.sources
-    } yield s"\t\"${source.name}\" -> \"${node.name}\""
-    "digraph G {\n" + lines.mkString("\n") + "\n}"
-
-case class Dependency(id: String, from: Node, to: Node)
-
-implicit class BeautifulNodePath(value: List[Node]):
-  def beautifulString: String =
-    if (value.nonEmpty) value.map(_.name).mkString(" -> ")
-    else "No path"
-
-
 class Archi private(
   xml: Elem,
   fileBegin: String,
   random: Random = new Random(123456789123456789L),
 ):
 
-  lazy val nodes: Map[String, Node] =
+  lazy val byId: Map[String, Node] =
     def unknowXsiTypeWarning(xsiType: String): Unit = printWarn(s"Unknown application element xsi:type: $xsiType")
     val folders: Folders = Folders(xml)
 
@@ -139,12 +102,36 @@ class Archi private(
       .map { case (element, isProject) =>
         val id = element.singleGetAttr("id")
         val name = element.singleGetAttr("name")
-        lazy val sources = sourceNodeIds.getOrElse(id, Nil).map(nodes).toList
-        lazy val targets = targetNodeIds.getOrElse(id, Nil).map(nodes).toList
+        lazy val sources = sourceNodeIds.getOrElse(id, Nil).map(byId).toList
+        lazy val targets = targetNodeIds.getOrElse(id, Nil).map(byId).toList
         id -> Node(id, name, isProject)(sources, targets)
       }
       .toMap
       .withDefault(key => throw Exception(s"Node with key $key element not found"))
+
+  lazy val byName: Map[String, Node] = byId.values.map(node => node.name -> node).toMap
+
+  lazy val projects: List[Node] = byId.values.filter(_.isProject).toList
+
+  lazy val allSources: Node => Set[Node] = Memo.mutableHashMapMemo {
+    _.sources.view.flatMap { source => allSources(source) + source }.toSet
+  }
+
+  implicit def nameToNode(name: String): Node = byName(name)
+
+  @tailrec private def getPathInner(key: Node, halfPaths: List[List[Node]], fullPaths: List[List[Node]]): List[List[Node]] =
+    val nextPaths =
+      for
+        halfPath <- halfPaths
+        source <- halfPath.head.sources
+        if allSources(source).contains(key) || source == key
+      yield source :: halfPath
+    val (nextHalf, nextFull) = nextPaths.partition(_.head != key)
+    val allFull = nextFull ::: fullPaths
+    if (nextHalf.isEmpty) allFull
+    else getPathInner(key, nextHalf, allFull)
+  def getPath(from: Node, to: Node): List[NodePath] =
+    getPathInner(from, List(to :: Nil), Nil).map(NodePath(_)).sorted
 
 
   private def getIds(elem: Elem): Seq[String] =
@@ -172,8 +159,7 @@ class Archi private(
     val updatedXml = folders.update(node = Some(updatedNodeFolder))
     new Archi(updatedXml, fileBegin, random)
 
-
-  type RemoveSC = (Seq[XmlNode], Seq[String])
+  private type RemoveSC = (Seq[XmlNode], Seq[String])
 
   private def removeSCInChild(child: XmlNode, relationIds: Set[String]): RemoveSC = child.child.map { grandChild =>
     val isSourceConnection = grandChild.label == "sourceConnection"
@@ -203,12 +189,15 @@ class Archi private(
     else Left(element.updateChildren(children)) :: sourceConnectionIds.map(Right(_)).toList
   }.partitionMap(identity)
 
-  def removeDependencies(dependencies: Set[(String, String)]): Archi =
+  def removeDependencies(dependencies: Iterable[(Node, Node)]): Archi =
+    for (from, to) <- dependencies yield
+      if (!from.targets.contains(to)) throw Exception(s"No such dependency: ${from.name} -> ${to.name}")
+    val idDependencies = dependencies.map((from, to) => (from.id, to.id)).toSet
     val folders: Folders = Folders(xml)
 
     val (dependencyElements, relationIdSeq) = folders.dependency.child.partitionMap { element =>
       val isTarget = element.label == "element" &&
-        dependencies.contains(element.singleGetAttr("source"), element.singleGetAttr("target"))
+        idDependencies.contains(element.singleGetAttr("source"), element.singleGetAttr("target"))
       if (isTarget) Right(element.singleGetAttr("id"))
       else Left(element)
     }
@@ -234,11 +223,11 @@ class Archi private(
     val updatedXml = folders.update(dependency = Some(dependencyFolderUpdated), diagram = Some(diagramFolderUpdated))
     new Archi(updatedXml, fileBegin, random)
 
-  def addDependencies(dependencies: Seq[(String, String)]): Archi =
+  def addDependencies(dependencies: Iterable[(Node, Node)]): Archi =
     val folders: Folders = Folders(xml)
-    val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.flatMap { case (from, to) =>
+    val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.toSeq.flatMap { case (from, to) =>
       Text("\n    ") ::
-      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from} target={to}/> ::
+      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from.id} target={to.id}/> ::
       Nil
     } ++ Text("\n  ")
     val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)

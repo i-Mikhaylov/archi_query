@@ -14,7 +14,7 @@ private val toAddModules = List[String](
 
 private val toRemoveDependencies = List[(String, String)](
   //toMain:
-  //"c4.cargo.operationalparameters" -> "c4.cargo.base",        to the end
+  //"c4.cargo.operationalparameters" -> "c4.cargo.base",        to the end (too many deps but I need to try)
 
   //mainToDomain:
   "c4.cargo.base" -> "c4.mod.domain.c4maficargo",
@@ -28,47 +28,41 @@ private val toRemoveDependencies = List[(String, String)](
   "c4.mod.c4srl.base" -> "c4.mod.domain.c4cnt.base",
   "c4.mod.c4srl.base" -> "c4.mod.domain.c4maficargo",
   "c4.mod.c4srl.base" -> "c4.mod.domain.c4roadunit",
-  //"c4.mod.c4srl.base" -> "c4.mod.domain.tug",                 to the end
-  //"c4.mod.c4srl.base" -> "c4.mod.wtms.c4bulkcargo",
-  //"c4.mod.c4srl.base" -> "c4.mod.wtms.c4vessel.base",
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.c4cnt.base",
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.c4gencargo",
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.c4perscar",
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.c4roadunit",  to the end
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.rwcar_base",
+  //"c4.mod.c4srl.base" -> "c4.mod.domain.tug",                 Capacity in srl?
+  "c4.mod.domain.c4placement" -> "c4.mod.domain.c4cnt.base",
+  "c4.mod.domain.c4placement" -> "c4.mod.domain.c4gencargo",
+  "c4.mod.domain.c4placement" -> "c4.mod.domain.c4perscar",
+  "c4.mod.domain.c4placement" -> "c4.mod.domain.c4roadunit",
+  //"c4.mod.domain.c4placement" -> "c4.mod.domain.rwcar_base",  merge domain.rwcar_base into cargo.rwcar ?
 
   //mainToCargo:
-  //"c4.mod.c4srl.base" -> "c4.cargo.c4gencargo",
-  //"c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",
-  //"c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",
-  //"c4.mod.c4srl.base" -> "c4.cargo.oogresolution",
+  "c4.mod.c4srl.base" -> "c4.cargo.c4gencargo",
+  "c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",//       to the end
+  "c4.mod.c4srl.base" -> "c4.cargo.oogresolution",
 
   //modToDomain:
-  //"c4.cargo.imo" -> "c4.mod.domain.c4cnt.base",
-  //"c4.cargo.inspection" -> "c4.mod.wtms.c4bulkcargo",
+  "c4.cargo.imo" -> "c4.mod.domain.c4cnt.base",
 
   //modCargoToCargo:
-  //"c4.cargo.c4container.base" -> "c4.cargo.c4container.allocrule",
-  //"c4.cargo.c4container.base" -> "c4.cargo.c4container.job",
-  //"c4.cargo.c4container.base" -> "c4.cargo.tiers_in_bundle",
-  //"c4.cargo.c4roadunit.base" -> "c4.cargo.c4roadunit.megacanvas",
-  //"c4.cargo.imo" -> "c4.cargo.imoresolution.base",
-  //"c4.cargo.imoresolution.base" -> "c4.cargo.imoresolution.notification",
-  //"c4.cargo.imoresolution.base" -> "c4.cargo.imoresolution.withdrawpolicyany",
+  "c4.cargo.c4container.base" -> "c4.cargo.tiers_in_bundle",
 )
 private val toAddDependencies = List[(String, String)](
   "c4.mod.domain.c4techflow" -> "c4.mod.domain.c4cnt.base",
   "c4.mod.reports.cargo" -> "c4.mod.domain.c4maficargo",
-  //"c4.cargo.base" -> "c4.mod.domain.c4perscar",
+  "c4.mod.domain.c4placement" -> "c4.cargo.c4perscar",
+  "c4.mod.domain.c4placement" -> "c4.cargo.c4gencargo",
+  "c4.cargo.strategy" -> "c4.cargo.c4gencargo",
+  "c4.cargo.withdraw" -> "c4.cargo.c4gencargo",
+  "c4.cargo.decision" -> "c4.cargo.imoresolution.base",
 )
 
 
-private lazy val srcArchi = ArchiRich(Archi(Files.readString(Paths.get(archiSrc))))
-private lazy val dstArchi = ArchiRich(Archi(Files.readString(Paths.get(archiDst))))
+private lazy val srcArchi = Archi(Files.readString(Paths.get(archiSrc)))
+private lazy val dstArchi = Archi(Files.readString(Paths.get(archiDst)))
 
 
 def findPrintModules(nameSubstring: String): Unit =
-  dstArchi.archi.nodes.values
+  dstArchi.byId.values
     .map(_.name)
     .filter(_.contains(nameSubstring))
     .toList
@@ -77,20 +71,19 @@ def findPrintModules(nameSubstring: String): Unit =
 
 
 def printModuleProjects(moduleNames: String*): Unit =
-  moduleNames.foreach { moduleName =>
-    val getPath = Node.pathToSource(srcArchi.nodeByName(moduleName).id)
+  for moduleName <- moduleNames yield
+    val module = srcArchi.byName(moduleName)
     println()
     srcArchi.projects
-      .filter(getPath(_).nonEmpty)
+      .filter(srcArchi.allSources(_).contains(module))
       .map(_.name)
       .sorted
       .foreach(println)
-  }
 
 
 def printInvalid(): Unit =
-  val nodes = dstArchi.archi.nodes.values
-  def byName(names: String*) = names.map(dstArchi.nodeByName)
+  val nodes = dstArchi.byId.values
+  def byName(names: String*) = names.map(dstArchi.byName)
 
   val mainDomain = byName("c4.core.inheritance", "c4.mod.domain.cargo")
   val mainCargo = byName("c4.mod.domain.c4placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw")
@@ -107,8 +100,6 @@ def printInvalid(): Unit =
     "c4.mod.domain.c4roadunit",
     "c4.mod.domain.rwcar_base",
     "c4.mod.domain.tug",
-    "c4.mod.wtms.c4bulkcargo",
-    "c4.mod.wtms.c4vessel.base",
 
     "c4.mod.domain.railway",
   ).toSet
@@ -168,25 +159,28 @@ def printProjectsDiff(): Unit =
 
 
 def rewrite(): Unit =
-  val byName = srcArchi.nodeByName
+  val byName = srcArchi.byName
 
   val toRemoveIds = toRemoveDependencies
-    .map((fromName, toName) => byName(fromName).id -> byName(toName).id)
+    .map((fromName, toName) => byName(fromName) -> byName(toName))
   val toAddIds = toAddDependencies
-    .map((fromName, toName) => byName(fromName).id -> byName(toName).id)
+    .map((fromName, toName) => byName(fromName) -> byName(toName))
 
-  val updated = Some(srcArchi.archi)
+  val updated = Some(srcArchi)
     .map { archi => if (toAddModules.nonEmpty) archi.addModules(toAddModules) else archi }
-    .map { archi => if (toRemoveIds.nonEmpty) archi.removeDependencies(toRemoveIds.toSet) else archi }
-    .map { archi => if (toAddIds.nonEmpty) archi.addDependencies(toAddIds.toSet) else archi }
+    .map { archi => if (toRemoveIds.nonEmpty) archi.removeDependencies(toRemoveIds) else archi }
+    .map { archi => if (toAddIds.nonEmpty) archi.addDependencies(toAddIds) else archi }
     .get
   Files.writeString(Paths.get(archiDst), updated.toString)
 
 
 @main def main(): Unit =
-  //println(srcArchi.moduleProjectDiff("c4.mod.c4srl.base", "c4.mod.domain.cargo"))
-  //printModuleProjects("c4.mod.domain.c4roadunit")
+  import srcArchi.nameToNode
+
+  //println(srcArchi.moduleProjectDiff("c4.mod.domain.rwcar", "c4.mod.domain.rwcar_base"))
+  srcArchi.getPath("c4.mod.domain.rwcar_base", "c4.proj.tcs.bkp").foreach(println)
+  //println(Node.pathToSource(dstArchi.nodeByName("c4.mod.domain.rwcar_base").id)(dstArchi.nodeByName("c4.proj.tcs.bkp")).beautifulString)
+  //printModuleProjects("c4.cargo.rwcar")
   //findPrintModules("service")
-  rewrite()
+  //rewrite();  printProjectsDiff()
   //printInvalid()
-  printProjectsDiff()
