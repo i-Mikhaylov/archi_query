@@ -1,5 +1,4 @@
 import Printer.*
-import scalaz.Memo
 
 import scala.annotation.tailrec
 import scala.language.implicitConversions
@@ -113,10 +112,6 @@ class Archi private(
 
   lazy val projects: List[Node] = byId.values.filter(_.isProject).toList
 
-  lazy val allSources: Node => Set[Node] = Memo.mutableHashMapMemo {
-    _.sources.view.flatMap { source => allSources(source) + source }.toSet
-  }
-
   implicit def nameToNode(name: String): Node = byName(name)
 
   @tailrec private def getPathInner(key: Node, halfPaths: List[List[Node]], fullPaths: List[List[Node]]): List[List[Node]] =
@@ -124,7 +119,7 @@ class Archi private(
       for
         halfPath <- halfPaths
         source <- halfPath.head.sources
-        if allSources(source).contains(key) || source == key
+        if source.allSources.contains(key) || source == key
       yield source :: halfPath
     val (nextHalf, nextFull) = nextPaths.partition(_.head != key)
     val allFull = nextFull ::: fullPaths
