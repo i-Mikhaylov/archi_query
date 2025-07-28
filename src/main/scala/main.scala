@@ -1,82 +1,50 @@
+import Printer.printError
+
 import java.io.File
 import java.nio.file.{Files, Paths}
+import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.sys.process.Process
 
 
 private val archiDst = Paths.get("../c4enterprise/uses.archimate")
-
-private val toAddModules = List[String](
-  "c4.mod.domain.decision", //                                  mb divide and move some part to domain?
-)
-
-private val toRemoveDependencies = List[(String, String)](
-
-  //modToMain:
-  //"c4.cargo.operationalparameters" -> "c4.cargo.base",        to the end (too many deps but I need to try)
-
-  //mainToModDomain:
-  "c4.cargo.decision" -> "c4.mod.domain.c4cnt.base",//          mb divide and move some part to domain?
-  "c4.cargo.decision" -> "c4.mod.domain.c4gencargo",
-  "c4.cargo.decision" -> "c4.mod.domain.c4maficargo",
-  "c4.cargo.decision" -> "c4.mod.domain.c4perscar",
-  "c4.cargo.decision" -> "c4.mod.domain.c4roadunit",
-  "c4.cargo.decision" -> "c4.mod.domain.tug",
-  //"c4.cargo.decision" -> "c4.mod.domain.rwcar",
-  //"c4.mod.c4srl.base" -> "c4.mod.domain.tug",                 Capacity in srl?
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.rwcar_base",  merge domain.rwcar_base into cargo.rwcar ?
-
-  //mainToModCargo:
-  //"c4.mod.c4srl.base" -> "c4.cargo.imoresolution.base",       depends hardly
-
-  //modToModDomain:
-
-  //modToModCargo:
-  //"c4.mod.wtms.c4bulkcargo" -> "c4.cargo.c4customs",          depends hardly
-)
-private val toAddDependencies = List[(String, String)](
-  "c4.mod.domain.cargo" -> "c4.mod.domain.decision",
-  "c4.mod.domain.decision" -> "c4.cargo.decision",
-  "c4.mod.domain.decision" -> "c4.mod.domain.c4cnt.base",
-  "c4.mod.domain.decision" -> "c4.mod.domain.c4gencargo",
-  "c4.mod.domain.decision" -> "c4.mod.domain.c4perscar",
-  "c4.mod.domain.decision" -> "c4.mod.domain.c4roadunit",
-
-  "c4.cargo.decision" -> "c4.cargo.c4gencargo",
-
-
-  //"c4.mod.domain.c4placement" -> "c4.mod.domain.c4perscar",   //temporary
-  "c4.cargo.base" -> "c4.mod.domain.c4cnt.base",              //temporary
-  "c4.cargo.base" -> "c4.mod.domain.c4gencargo",              //temporary
-  "c4.cargo.base" -> "c4.mod.domain.c4roadunit",              //temporary
-  "c4.cargo.base" -> "c4.mod.c4statemachine.service_order.base",
-  "c4.cargo.base" -> "c4.mod.vehicle.base",
-  //"c4.mod.domain.decision" -> "c4.cargo.decision",
-)
-
 private lazy val srcArchi = Archi(Process("git show HEAD:uses.archimate", new File("../c4enterprise/")).!!)
 private lazy val dstArchi = Archi(Files.readString(archiDst))
 
 
-def findPrintModules(nameSubstring: String): Unit =
-  dstArchi.byId.values
+private class ArchiException(message: String) extends Exception(message)
+object ArchiException:
+  def apply(message: String) = new ArchiException(message)
+
+
+def findPrintModules(nameSubstring: String*): Unit =
+  val substrings = nameSubstring.toList
+  if (substrings.isEmpty) printError("No key specified to find")
+  else dstArchi.byId.values
     .map(_.name)
-    .filter(_.contains(nameSubstring))
+    .filter(name => substrings.exists(name.contains))
     .toList
     .sorted
     .foreach(println)
 
 
 def printModuleProjects(modules: Node*): Unit =
-  for module <- modules yield
-    println(s"\n${module.name}:")
-    module.targetProjects.toList.map("  " + _.name).sorted.foreach(println)
+  def processModule(module: Node, prefix: String): Unit =
+    module.targetProjects.toList.map(prefix + _.name).sorted.foreach(println)
+  modules.toList match
+    case Nil => printError("No modules specified")
+    case single :: Nil => processModule(single, "")
+    case multiple =>
+      for module <- modules yield
+        println(s"\n${module.name}:")
+        processModule(module, "  ")
+        println()
 
 
 def printModuleProjectDiff(module1: Node, module2: Node): Unit =
   val List(projects1, projects2) = List(module1, module2).map(_.targetProjects)
   def print(module: Node, selfProjects: Set[Node], otherProjects: Set[Node]): Unit =
-    println(s"Only in ${module.name}:")
+    println(s"Only ${module.name}:")
     selfProjects.view.filterNot(otherProjects.contains).map("  " + _.name).toList.sorted.foreach(println)
   print(module1, projects1, projects2)
   print(module2, projects2, projects1)
@@ -93,7 +61,7 @@ def printInvalid(): Unit =
   yield source -> node
 
   val mainDomain = byName("c4.core.inheritance", "c4.mod.domain.cargo")
-  val mainCargo = byName("c4.mod.domain.c4placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw").toSet
+  val mainCargo = byName("c4.cargo.placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw").toSet
   val mainSrl = byName("c4.mod.c4srl.base", "c4.mod.wtms.c4cargo")
   val allMain = mainCargo ++ mainSrl ++ mainDomain
 
@@ -152,7 +120,11 @@ def printProjectsDiff(ignoreModuleName: String*): Unit =
       if (onlyDstModules.nonEmpty) println("  + " + onlyDstModules.map(_.name).sorted.mkString("\n    "))
 
 
-def rewrite(): Unit =
+def rewrite(
+  toAddModules: List[String] = Nil,
+  toRemoveDependencies: List[(String, String)] = Nil,
+  toAddDependencies: List[(String, String)] = Nil,
+): Unit =
   srcArchi match { case archi =>
     if (toAddModules.nonEmpty) archi.addModules(toAddModules) else archi
   }
@@ -169,12 +141,71 @@ def rewrite(): Unit =
   }
 
 
-@main def main(): Unit =
-  import dstArchi.nameToNode
+def parseRewrite(data: String): Unit =
 
-  //printModuleProjectDiff("c4.mod.domain.c4cnt.base", "c4.cargo.c4container.base")
-  //dstArchi.getPath("c4.mod.domain.c4techflow", "c4.cargo.c4container.base").foreach(println)
-  //printModuleProjects("c4.cargo.c4perscar")
-  //findPrintModules("service")
-  rewrite();  printProjectsDiff(toAddModules.toArray*)
-  //printInvalid()
+  trait Mode
+  case object NoMode extends Mode
+  case object AddModules extends Mode
+  case object RemoveDeps extends Mode
+  case object AddDeps extends Mode
+
+  object ModeLine:
+    def unapply(line: String): Option[Mode] = line.filter(_.isLetter).toLowerCase match
+      case "addmodules" => Some(AddModules)
+      case "removedependencies" => Some(RemoveDeps)
+      case "adddependencies" => Some(AddDeps)
+      case _ => None
+  object DepLine:
+    private val regex = "(.*?)\\s*->\\s*(.*?)".r
+    def unapply(line: String): Option[(String, String)] =
+      Some(line).collect { case regex(module1, module2) => module1 -> module2 }
+
+  @tailrec def parse(
+    preParsedlines: List[String],
+    addModules: List[String] = Nil,
+    removeDeps: List[(String, String)] = Nil,
+    addDeps: List[(String, String)] = Nil,
+    mode: Mode = NoMode,
+  ): (List[String], List[(String, String)], List[(String, String)]) = (mode, preParsedlines) match
+    case (_, Nil)                           => (addModules, removeDeps, addDeps)
+    case (_, ModeLine(newMode) :: tail)     => parse(tail, addModules, removeDeps, addDeps, newMode)
+    case (AddModules, module :: tail)       => parse(tail, module :: addModules, removeDeps, addDeps, mode)
+    case (RemoveDeps, DepLine(dep) :: tail) => parse(tail, addModules, dep :: removeDeps, addDeps, mode)
+    case (AddDeps, DepLine(dep) :: tail)    => parse(tail, addModules, removeDeps, dep :: addDeps, mode)
+    case (_, invalid :: _)                  => throw ArchiException(s"Invalid line: $invalid")
+
+  val uncommentRegex = "(.*?)(//|#).*".r
+  val trimRegex = "\\s*(.*?)\\s*".r
+  val preParsedData = data.split('\n').toList
+    .map {
+      case uncommentRegex(uncommentedLine, _) => uncommentedLine
+      case noComment => noComment
+    }
+    .collect { case trimRegex(trimmed) if trimmed.nonEmpty => trimmed }
+
+  val (addModules, removeDeps, addDeps) = parse(preParsedData)
+  rewrite(addModules, removeDeps, addDeps)
+  printProjectsDiff(addModules.toArray*)
+
+
+@main def main(allArgs: String*): Unit =
+  try
+    val (archi, queryArgs) = allArgs match
+      case Nil => throw ArchiException("No args")
+      case "src" :: tail => srcArchi -> tail
+      case "dst" :: tail => dstArchi -> tail
+      case _ => srcArchi -> allArgs
+    import archi.nameToNode
+
+    queryArgs match
+      case "find-module" :: keys                      => findPrintModules(keys*)
+      case "module-projects" :: moduleNames           => printModuleProjects(moduleNames.map(nameToNode)*)
+      case "module-diff" :: module1 :: module2 :: Nil => printModuleProjectDiff(module1, module2)
+      case "get-invalid" :: Nil                       => printInvalid()
+      case "rewrite" :: dataPath :: Nil               => parseRewrite(Files.readString(Paths get dataPath))
+      case "module-diff" :: _ => throw ArchiException("module-diff needs exactly 2 arguments")
+      case "get-invalid" :: _ => throw ArchiException("get-invalid doesn't need any extra arguments")
+      case "rewrite" :: _     => throw ArchiException("rewrite needs only 1 argument with the path of data file")
+      case _                  => throw ArchiException("Invalid command")
+
+  catch case archi: ArchiException => printError(archi.getMessage)

@@ -114,21 +114,6 @@ class Archi private(
 
   implicit def nameToNode(name: String): Node = byName(name)
 
-  @tailrec private def getPathInner(key: Node, halfPaths: List[List[Node]], fullPaths: List[List[Node]]): List[List[Node]] =
-    val nextPaths =
-      for
-        halfPath <- halfPaths
-        source <- halfPath.head.sources
-        if source.allSources.contains(key) || source == key
-      yield source :: halfPath
-    val (nextHalf, nextFull) = nextPaths.partition(_.head != key)
-    val allFull = nextFull ::: fullPaths
-    if (nextHalf.isEmpty) allFull
-    else getPathInner(key, nextHalf, allFull)
-  def getPath(from: Node, to: Node): List[NodePath] =
-    getPathInner(from, List(to :: Nil), Nil).map(NodePath(_)).sorted
-
-
   private def getIds(elem: Elem): Seq[String] =
     (elem \ "@id").map(_.text) ++ elem.child.flatMap {
       case elem: Elem => getIds(elem)
@@ -240,3 +225,22 @@ object Archi:
   def apply(xml: String): Archi =
     val fileBegin = xml.substring(0, xml.indexOf('\n', xml.indexOf('\n') + 1))
     new Archi(XML.loadString(xml), fileBegin)
+
+
+  @tailrec private def getPathInner(key: Node, halfPaths: List[List[Node]], fullPaths: List[List[Node]]): List[List[Node]] =
+    val nextPaths =
+      for
+        halfPath <- halfPaths
+        source <- halfPath.head.sources
+        if source.allSources.contains(key) || source == key
+      yield source :: halfPath
+    val (nextHalf, nextFull) = nextPaths.partition(_.head != key)
+    val allFull = nextFull ::: fullPaths
+    if (nextHalf.isEmpty) allFull
+    else getPathInner(key, nextHalf, allFull)
+  def getPath(from: Node, to: Node): List[NodePath] =
+    getPathInner(from, List(to :: Nil), Nil)
+      .groupMapReduce(identity)(_ => 1)(_ + _)
+      .map(NodePath(_, _))
+      .toList
+      .sorted

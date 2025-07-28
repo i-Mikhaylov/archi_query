@@ -20,10 +20,10 @@ case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[
     "digraph G {\n" + lines.mkString("\n") + "\n}"
 
 
-case class NodePath(nodes: List[Node]):
+case class NodePath(nodes: List[Node], count: Int):
   val size: Int = nodes.size
   override def toString: String =
-    if (nodes.nonEmpty) nodes.map(_.name).mkString(" -> ")
+    if (nodes.nonEmpty) nodes.map(_.name).mkString(" -> ") + (if (count > 1) s" (x$count)" else "")
     else "No path"
 
 
