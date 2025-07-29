@@ -121,11 +121,15 @@ def printProjectsDiff(ignoreModuleName: String*): Unit =
 
 
 def rewrite(
+  toRenameModules: List[(String, String)] = Nil,
   toAddModules: List[String] = Nil,
   toRemoveDependencies: List[(String, String)] = Nil,
   toAddDependencies: List[(String, String)] = Nil,
 ): Unit =
   srcArchi match { case archi =>
+    if (toRenameModules.nonEmpty) archi.renameModules(toRenameModules.toMap) else archi
+  }
+  match { case archi =>
     if (toAddModules.nonEmpty) archi.addModules(toAddModules) else archi
   }
   match { case archi =>
@@ -143,36 +147,41 @@ def rewrite(
 
 def parseRewrite(data: String): Unit =
 
-  trait Mode
-  case object NoMode extends Mode
-  case object AddModules extends Mode
-  case object RemoveDeps extends Mode
-  case object AddDeps extends Mode
+  abstract class AnyMode
+  abstract class Mode(val key: String) extends AnyMode
+  case object NoMode extends AnyMode
+  case object RenameModules extends Mode("renamemodules")
+  case object AddModules extends Mode("addmodules")
+  case object RemoveDeps extends Mode("removedependencies")
+  case object AddDeps extends Mode("adddependencies")
 
   object ModeLine:
-    def unapply(line: String): Option[Mode] = line.filter(_.isLetter).toLowerCase match
-      case "addmodules" => Some(AddModules)
-      case "removedependencies" => Some(RemoveDeps)
-      case "adddependencies" => Some(AddDeps)
-      case _ => None
-  object DepLine:
+    def unapply(line: String): Option[Mode] =
+      val key = line.filter(_.isLetter).toLowerCase
+      List(RenameModules, AddModules, RemoveDeps, AddDeps).find(_.key == key)
+  object ArrowLine:
     private val regex = "(.*?)\\s*->\\s*(.*?)".r
     def unapply(line: String): Option[(String, String)] =
       Some(line).collect { case regex(module1, module2) => module1 -> module2 }
 
+  type LS = List[String]
+  type LSS = List[(String, String)]
+  
   @tailrec def parse(
-    preParsedlines: List[String],
-    addModules: List[String] = Nil,
-    removeDeps: List[(String, String)] = Nil,
-    addDeps: List[(String, String)] = Nil,
-    mode: Mode = NoMode,
-  ): (List[String], List[(String, String)], List[(String, String)]) = (mode, preParsedlines) match
-    case (_, Nil)                           => (addModules, removeDeps, addDeps)
-    case (_, ModeLine(newMode) :: tail)     => parse(tail, addModules, removeDeps, addDeps, newMode)
-    case (AddModules, module :: tail)       => parse(tail, module :: addModules, removeDeps, addDeps, mode)
-    case (RemoveDeps, DepLine(dep) :: tail) => parse(tail, addModules, dep :: removeDeps, addDeps, mode)
-    case (AddDeps, DepLine(dep) :: tail)    => parse(tail, addModules, removeDeps, dep :: addDeps, mode)
-    case (_, invalid :: _)                  => throw ArchiException(s"Invalid line: $invalid")
+    preParsedLines: LS,
+    renameModules: LSS = Nil,
+    addModules: LS = Nil,
+    removeDeps: LSS = Nil,
+    addDeps: LSS = Nil,
+    mode: AnyMode = NoMode,
+  ): (LSS, LS, LSS, LSS) = (mode, preParsedLines) match
+    case (_, Nil)                               => (renameModules, addModules, removeDeps, addDeps)
+    case (_, ModeLine(newMode) :: tail)         => parse(tail, renameModules, addModules, removeDeps, addDeps, newMode)
+    case (RenameModules,ArrowLine(rename)::tail)=> parse(tail, rename :: renameModules, addModules, removeDeps, addDeps, mode)
+    case (AddModules, module :: tail)           => parse(tail, renameModules, module :: addModules, removeDeps, addDeps, mode)
+    case (RemoveDeps, ArrowLine(dep) :: tail)   => parse(tail, renameModules, addModules, dep :: removeDeps, addDeps, mode)
+    case (AddDeps, ArrowLine(dep) :: tail)      => parse(tail, renameModules, addModules, removeDeps, dep :: addDeps, mode)
+    case (_, invalid :: _)                      => throw ArchiException(s"Invalid line: $invalid")
 
   val uncommentRegex = "(.*?)(//|#).*".r
   val trimRegex = "\\s*(.*?)\\s*".r
@@ -183,8 +192,8 @@ def parseRewrite(data: String): Unit =
     }
     .collect { case trimRegex(trimmed) if trimmed.nonEmpty => trimmed }
 
-  val (addModules, removeDeps, addDeps) = parse(preParsedData)
-  rewrite(addModules, removeDeps, addDeps)
+  val (renameModules, addModules, removeDeps, addDeps) = parse(preParsedData)
+  rewrite(renameModules, addModules, removeDeps, addDeps)
   printProjectsDiff(addModules.toArray*)
 
 

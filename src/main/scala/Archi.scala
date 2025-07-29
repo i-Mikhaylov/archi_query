@@ -3,16 +3,16 @@ import Printer.*
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Random, Try}
-import scala.xml.{Attribute, Elem, NodeSeq, Null, Text, XML, Node as XmlNode}
+import scala.xml.{Attribute, Elem, MetaData, NodeSeq, Null, Text, XML, Node as XmlNode}
 
 
 private implicit class SingleElementSeq[T](seq: Seq[T]):
   def single(name: String): T = {
     def truncatedName = if (name.length > 10000) name.substring(0, 10000) + "..." else name
     seq match {
-      case Seq() => throw Exception(s"Not found $truncatedName")
+      case Seq() => throw ArchiException(s"Not found $truncatedName")
       case Seq(single) => single
-      case _ => throw Exception(s"Found multiple occurrences of $truncatedName")
+      case _ => throw ArchiException(s"Found multiple occurrences of $truncatedName")
     }
   }
 
@@ -26,20 +26,21 @@ private implicit class RichXmlNode[T](node: XmlNode):
     .single(s"attr $query (${node.toString})")
     .text
 
-  def mapAttrs(op: (String, String) => Option[String]): Elem = node match {
+  def mapAttrs(op: PartialFunction[(String, String), String]): Elem = node match {
     case elem: Elem =>
-      val attributes = elem.attributes.reduceRight {
-        case (attr: Attribute, acc) =>
-          op(attr.prefixedKey, attr.value.text).fold(acc) { Attribute(attr.pre, attr.key, _, acc) }
-        case other => Null
+      val attributes = elem.attributes.foldRight[MetaData](Null) {
+        case (attr: Attribute, tail) =>
+          val newValue = op.applyOrElse((attr.prefixedKey, attr.value.text), _._2)
+          Attribute(attr.pre, attr.key, newValue, tail)
+        case (Null, tail) => Null
       }
       elem.copy(attributes = attributes)
-    case other => throw Exception(s"Can't map attributes on non Elem: $other")
+    case other => throw ArchiException(s"Can't map attributes on non Elem: $other")
   }
 
   def updateChildren(children: Seq[XmlNode]): Elem = node match {
     case elem: Elem => elem.copy(child = children)
-    case other => throw Exception(s"Can't update children on non Elem: $other")
+    case other => throw ArchiException(s"Can't update children on non Elem: $other")
   }
 
 private class Folders(xml: Elem):
@@ -106,7 +107,7 @@ class Archi private(
         id -> Node(id, name, isProject)(sources, targets)
       }
       .toMap
-      .withDefault(key => throw Exception(s"Node with key $key element not found"))
+      .withDefault(key => throw ArchiException(s"Node with key $key element not found"))
 
   lazy val byName: Map[String, Node] = byId.values.map(node => node.name -> node).toMap
 
@@ -128,6 +129,22 @@ class Archi private(
       .map(id => f"$id%08x")
       .head
 
+  def renameModules(renameMap: Map[String, String]): Archi =
+    for (oldName, _) <- renameMap yield
+      if (!byName.contains(oldName))
+        throw ArchiException(s"Node $oldName not found")
+
+    val folders: Folders = Folders(xml)
+    val updatedChildren = folders.node.child.map {
+      case element: Elem if element.label == "element" =>
+        renameMap.get(element.singleGetAttr("name")).fold(element)
+          { newName => element.mapAttrs { case ("name", _) => newName } }
+      case other => other
+    }
+    val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
+    val updatedXml = folders.update(node = Some(updatedNodeFolder))
+    new Archi(updatedXml, fileBegin, random)
+
   def addModules(names: Iterable[String]): Archi =
     val folders: Folders = Folders(xml)
     val updatedChildren = folders.node.child.dropRight(1) ++ names.flatMap { name =>
@@ -144,7 +161,7 @@ class Archi private(
   private def removeSCInChild(child: XmlNode, relationIds: Set[String]): RemoveSC = child.child.map { grandChild =>
     val isSourceConnection = grandChild.label == "sourceConnection"
     if (isSourceConnection && grandChild.singleGetAttr("xsi:type") != "archimate:Connection")
-      throw Exception(s"Found unknow xsi:type: $grandChild")
+      throw ArchiException(s"Found unknow xsi:type: $grandChild")
     lazy val targetRelation = relationIds contains grandChild.singleGetAttr("archimateRelationship")
     if (isSourceConnection && targetRelation) Right(grandChild.singleGetAttr("id"))
     else Left(grandChild)
@@ -164,14 +181,14 @@ class Archi private(
     lazy val (children, sourceConnectionIds) = removeSCInElement(element, relationIds)
     val isElement = element.label == "element"
     if (isElement && element.singleGetAttr("xsi:type") != "archimate:ArchimateDiagramModel")
-      throw Exception(s"Found unknown xsi:type: ${element.toString.substring(0, 10000 min element.length)}")
+      throw ArchiException(s"Found unknown xsi:type: ${element.toString.substring(0, 10000 min element.length)}")
     if (!isElement || sourceConnectionIds.isEmpty) Left(element) :: Nil
     else Left(element.updateChildren(children)) :: sourceConnectionIds.map(Right(_)).toList
   }.partitionMap(identity)
 
   def removeDependencies(dependencies: Iterable[(Node, Node)]): Archi =
     for (from, to) <- dependencies yield
-      if (!from.targets.contains(to)) throw Exception(s"No such dependency: ${from.name} -> ${to.name}")
+      if (!from.targets.contains(to)) throw ArchiException(s"No such dependency: ${from.name} -> ${to.name}")
     val idDependencies = dependencies.map((from, to) => (from.id, to.id)).toSet
     val folders: Folders = Folders(xml)
 
@@ -190,9 +207,8 @@ class Archi private(
     val diagramElements2 = diagramElements1.map { element =>
       lazy val children = element.child.map { child =>
         if (child.label != "child") child
-        else child.mapAttrs {
-          case ("targetConnections", idStr) => Some(idStr.split(' ').filterNot(sourceConnectionIds.contains).mkString(" "))
-          case (otherKey, value) => Some(value)
+        else child.mapAttrs { case ("targetConnections", idStr) =>
+          idStr.split(' ').filterNot(sourceConnectionIds.contains).mkString(" ")
         }
       }
       if (element.label == "element") element.updateChildren(children)
