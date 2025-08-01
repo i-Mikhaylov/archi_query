@@ -60,9 +60,9 @@ def printInvalid(): Unit =
     if filter(source)
   yield source -> node
 
-  val mainDomain = byName("c4.core.inheritance", "c4.mod.domain.cargo")
-  val mainCargo = byName("c4.cargo.placement", "c4.cargo.base", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw").toSet
-  val mainSrl = byName("c4.mod.c4srl.base", "c4.mod.wtms.c4cargo")
+  val mainDomain = byName("c4.core.inheritance", "c4.mod.domain.cargo", "c4.mod.domain.c4placement", "c4.mod.domain.decision")
+  val mainCargo = byName("c4.cargo.base", "c4.cargo.placement", "c4.cargo.decision", "c4.cargo.strategy", "c4.cargo.withdraw").toSet
+  val mainSrl = byName("c4.mod.c4srl.base")
   val allMain = mainCargo ++ mainSrl ++ mainDomain
 
   val modDomain = byName(
@@ -98,7 +98,7 @@ def printInvalid(): Unit =
   val modToModCargo   = sourceFilter(modCargo,  (modCargo ++ modWtms).contains)
 
   (modToMain ++ mainToModDomain ++ mainToModCargo ++ modToModDomain ++ modToModCargo)
-    .map((source, target) => s"""//"${source.name}" -> "${target.name}",""")
+    .map((source, target) => source.name + " -> " + target.name)
     .toList
     .sorted
     .foreach(println)
@@ -125,6 +125,7 @@ def rewrite(
   toAddModules: List[String] = Nil,
   toRemoveDependencies: List[(String, String)] = Nil,
   toAddDependencies: List[(String, String)] = Nil,
+  mainProject: Option[String] = None,
 ): Unit =
   srcArchi match { case archi =>
     if (toRenameModules.nonEmpty) archi.renameModules(toRenameModules.toMap) else archi
@@ -137,7 +138,11 @@ def rewrite(
     if (toRemoveIds.nonEmpty) archi.removeDependencies(toRemoveIds) else archi
   }
   match { case archi =>
-    val toAddIds = toAddDependencies.map((from, to) => archi.byName(from) -> archi.byName(to))
+    val mainProjectDeps = mainProject.map { mainProject =>
+      val mainNode = archi.byName(mainProject)
+      archi.projects.filter(_ != mainNode).map(_ -> mainNode)
+    }.getOrElse(Nil)
+    val toAddIds = toAddDependencies.map((from, to) => archi.byName(from) -> archi.byName(to)) ::: mainProjectDeps
     if (toAddIds.nonEmpty) archi.addDependencies(toAddIds) else archi
   }
   match { case archi =>
@@ -154,11 +159,12 @@ def parseRewrite(data: String): Unit =
   case object AddModules extends Mode("addmodules")
   case object RemoveDeps extends Mode("removedependencies")
   case object AddDeps extends Mode("adddependencies")
+  case object MainProject extends Mode("mainproject")
 
   object ModeLine:
     def unapply(line: String): Option[Mode] =
       val key = line.filter(_.isLetter).toLowerCase
-      List(RenameModules, AddModules, RemoveDeps, AddDeps).find(_.key == key)
+      List(RenameModules, AddModules, RemoveDeps, AddDeps, MainProject).find(_.key == key)
   object ArrowLine:
     private val regex = "(.*?)\\s*->\\s*(.*?)".r
     def unapply(line: String): Option[(String, String)] =
@@ -166,6 +172,10 @@ def parseRewrite(data: String): Unit =
 
   type LS = List[String]
   type LSS = List[(String, String)]
+  type OS = Option[String]
+
+  def setMainProj(oldMain: OS, newMain: String) =
+    oldMain.fold(Some(newMain))(_ => throw ArchiException("Only one main project can be specified"))
   
   @tailrec def parse(
     preParsedLines: LS,
@@ -173,14 +183,16 @@ def parseRewrite(data: String): Unit =
     addModules: LS = Nil,
     removeDeps: LSS = Nil,
     addDeps: LSS = Nil,
+    mainProj: OS = None,
     mode: AnyMode = NoMode,
-  ): (LSS, LS, LSS, LSS) = (mode, preParsedLines) match
-    case (_, Nil)                               => (renameModules, addModules, removeDeps, addDeps)
-    case (_, ModeLine(newMode) :: tail)         => parse(tail, renameModules, addModules, removeDeps, addDeps, newMode)
-    case (RenameModules,ArrowLine(rename)::tail)=> parse(tail, rename :: renameModules, addModules, removeDeps, addDeps, mode)
-    case (AddModules, module :: tail)           => parse(tail, renameModules, module :: addModules, removeDeps, addDeps, mode)
-    case (RemoveDeps, ArrowLine(dep) :: tail)   => parse(tail, renameModules, addModules, dep :: removeDeps, addDeps, mode)
-    case (AddDeps, ArrowLine(dep) :: tail)      => parse(tail, renameModules, addModules, removeDeps, dep :: addDeps, mode)
+  ): (LSS, LS, LSS, LSS, OS) = (mode, preParsedLines) match
+    case (_, Nil)                               => (renameModules, addModules, removeDeps, addDeps, mainProj)
+    case (_, ModeLine(newMode) :: tail)         => parse(tail, renameModules, addModules, removeDeps, addDeps, mainProj, newMode)
+    case (RenameModules,ArrowLine(rename)::tail)=> parse(tail, rename :: renameModules, addModules, removeDeps, addDeps, mainProj, mode)
+    case (AddModules, module :: tail)           => parse(tail, renameModules, module :: addModules, removeDeps, addDeps, mainProj, mode)
+    case (RemoveDeps, ArrowLine(dep) :: tail)   => parse(tail, renameModules, addModules, dep :: removeDeps, addDeps, mainProj, mode)
+    case (AddDeps, ArrowLine(dep) :: tail)      => parse(tail, renameModules, addModules, removeDeps, dep :: addDeps, mainProj, mode)
+    case (MainProject, module :: tail)          => parse(tail, renameModules, addModules, removeDeps, addDeps, setMainProj(mainProj, module), mode)
     case (_, invalid :: _)                      => throw ArchiException(s"Invalid line: $invalid")
 
   val uncommentRegex = "(.*?)(//|#).*".r
@@ -192,12 +204,12 @@ def parseRewrite(data: String): Unit =
     }
     .collect { case trimRegex(trimmed) if trimmed.nonEmpty => trimmed }
 
-  val (renameModules, addModules, removeDeps, addDeps) = parse(preParsedData)
-  rewrite(renameModules, addModules, removeDeps, addDeps)
+  val (renameModules, addModules, removeDeps, addDeps, mainProject) = parse(preParsedData)
+  rewrite(renameModules, addModules, removeDeps, addDeps, mainProject)
   printProjectsDiff(addModules.toArray*)
 
 
-@main def main(allArgs: String*): Unit =
+def defaultCli(allArgs: String*): Unit =
   try
     val (archi, queryArgs) = allArgs match
       case Nil => throw ArchiException("No args")
@@ -220,3 +232,7 @@ def parseRewrite(data: String): Unit =
       case _                  => throw ArchiException("Invalid command")
 
   catch case archi: ArchiException => printError(archi.getMessage)
+
+
+@main def main(args: String*): Unit =
+  defaultCli(args*)
