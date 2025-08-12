@@ -16,8 +16,11 @@ private object Modes:
       case invalid => throwLine(invalid)
   private implicit def toList[N](names: List[String])(using archi: Archi, conv: String => N): List[N] = names.map(conv)
 
-  sealed abstract class AnyMode(val process: Process)
-  sealed abstract class Mode(val key: String, process: Process) extends AnyMode(process)
+  sealed abstract class AnyMode(archiTransform: Process):
+    def process(archi: Archi, lines: List[String]): Archi =
+      if (lines.isEmpty) archi
+      else archiTransform(archi, lines)
+  sealed abstract class Mode(val key: String, archiTransform: Process) extends AnyMode(archiTransform)
 
   object NoMode       extends AnyMode((archi, lines) => lines.headOption.fold(archi)(throwLine))
   object RemoveModule extends Mode("remove modules",      { implicit (archi, names) => archi.removeModules(names) })

@@ -55,36 +55,44 @@ private class Folders(xml: Elem):
   lazy val diagram: XmlNode = apply("diagrams")
 
 private object DiagramChildOps:
-  private def isChildType(xsiType: String) = xsiType == "archimate:DiagramObject"
-  private def isGroupType(xsiType: String) = xsiType == "archimate:ArchimateDiagramModel" || xsiType == "archimate:Group"
+
+  private enum ElementType { case Child, Group, Other }
+  private def getType(element: XmlNode) =
+    def xsiType = element.singleGetAttr("xsi:type")
+    element.label match
+      case "element" => xsiType match
+        case "archimate:ArchimateDiagramModel"  => ElementType.Group
+        case _                                  => ElementType.Other
+      case "child" => xsiType match
+        case "archimate:Group"                  => ElementType.Group
+        case "archimate:DiagramObject"          => ElementType.Child
+        case _                                  => ElementType.Other
+      case _                                    => ElementType.Other
 
   def diagramChildFilter(children: Seq[XmlNode])(predicate: XmlNode => Boolean): Seq[XmlNode] =
     children.flatMap { element =>
-      lazy val xsiType = element.singleGetAttr("xsi:type")
-      if (element.label != "element") Some(element)
-      else if (isChildType(xsiType)) Option.when(predicate(element))(element)
-      else if (isGroupType(xsiType)) Some(element updateChildren diagramChildFilter(element.child)(predicate))
-      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
+      getType(element) match
+        case ElementType.Child => Option.when(predicate(element))(element)
+        case ElementType.Group => Some(element updateChildren diagramChildFilter(element.child)(predicate))
+        case ElementType.Other => Some(element)
     }
   def diagramChildMap(children: Seq[XmlNode])(transform: XmlNode => XmlNode): Seq[XmlNode] =
     children.map { element =>
-      lazy val xsiType = element.singleGetAttr("xsi:type")
-      if (element.label != "element") element
-      else if (isChildType(xsiType)) transform(element)
-      else if (isGroupType(xsiType)) element updateChildren diagramChildMap(element.child)(transform)
-      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
+      getType(element) match
+        case ElementType.Child => transform(element)
+        case ElementType.Group => element updateChildren diagramChildMap(element.child)(transform)
+        case ElementType.Other => element
     }
   def diagramChildMapExtract[Acc](children: Seq[XmlNode])(transform: XmlNode => (XmlNode, Seq[Acc])): (Seq[XmlNode], Seq[Acc]) =
     children.flatMap { element =>
-      lazy val xsiType = element.singleGetAttr("xsi:type")
-      if (element.label != "element") Some(Left(element))
-      else if (isChildType(xsiType))
-        val (updatedElement, acc) = transform(element)
-        Left(updatedElement) :: acc.map(Right(_)).toList
-      else if (isGroupType(xsiType))
-        val (updatedChildren, acc) = diagramChildMapExtract(element.child)(transform)
-        Left(element updateChildren updatedChildren) :: acc.map(Right(_)).toList
-      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
+      getType(element) match
+        case ElementType.Child =>
+          val (updatedElement, acc) = transform(element)
+          Left(updatedElement) :: acc.map(Right(_)).toList
+        case ElementType.Group =>
+          val (updatedChildren, acc) = diagramChildMapExtract(element.child)(transform)
+          Left(element updateChildren updatedChildren) :: acc.map(Right(_)).toList
+        case ElementType.Other => Some(Left(element))
     }.partitionMap(identity)
 
 
@@ -175,10 +183,8 @@ class Archi private(
     val idDependencies = dependencies.map((from, to) => (from.id, to.id)).toSet
 
     val (dependencyChildren, relationIdSeq) = folders.dependency.child.partitionMap { element =>
-      val isTarget = element.label == "element" &&
-        idDependencies.contains(element.singleGetAttr("source"), element.singleGetAttr("target"))
-      if (isTarget) Right(element.singleGetAttr("id"))
-      else Left(element)
+      def toRemove = idDependencies.contains(element.singleGetAttr("source"), element.singleGetAttr("target"))
+      Either.cond(element.label == "element" && toRemove, element.singleGetAttr("id"), element)
     }
     val relationIds = relationIdSeq.toSet
 
