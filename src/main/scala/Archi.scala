@@ -1,3 +1,4 @@
+import DiagramChildOps.*
 import Printer.*
 
 import scala.annotation.tailrec
@@ -53,21 +54,38 @@ private class Folders(xml: Elem):
   lazy val node: XmlNode = apply("application")
   lazy val diagram: XmlNode = apply("diagrams")
 
-  def update(
-    dependency: Option[XmlNode] = None,
-    node: Option[XmlNode] = None,
-    diagram: Option[XmlNode] = None,
-  ): Elem =
-    val updateMap = {
-      dependency.map("relations" -> _).toList :::
-      node.map("application" -> _).toList :::
-      diagram.map("diagrams" -> _).toList
-    }.toMap
-    xml updateChildren xml.child.map { folder =>
-      Option.when(folder.label == "folder")(folder.singleGetAttr("type"))
-        .flatMap(updateMap.get)
-        .getOrElse(folder)
+private object DiagramChildOps:
+  private def isChildType(xsiType: String) = xsiType == "archimate:DiagramObject"
+  private def isGroupType(xsiType: String) = xsiType == "archimate:ArchimateDiagramModel" || xsiType == "archimate:Group"
+
+  def diagramChildFilter(children: Seq[XmlNode])(predicate: XmlNode => Boolean): Seq[XmlNode] =
+    children.flatMap { element =>
+      lazy val xsiType = element.singleGetAttr("xsi:type")
+      if (element.label != "element") Some(element)
+      else if (isChildType(xsiType)) Option.when(predicate(element))(element)
+      else if (isGroupType(xsiType)) Some(element updateChildren diagramChildFilter(element.child)(predicate))
+      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
     }
+  def diagramChildMap(children: Seq[XmlNode])(transform: XmlNode => XmlNode): Seq[XmlNode] =
+    children.map { element =>
+      lazy val xsiType = element.singleGetAttr("xsi:type")
+      if (element.label != "element") element
+      else if (isChildType(xsiType)) transform(element)
+      else if (isGroupType(xsiType)) element updateChildren diagramChildMap(element.child)(transform)
+      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
+    }
+  def diagramChildMapExtract[Acc](children: Seq[XmlNode])(transform: XmlNode => (XmlNode, Seq[Acc])): (Seq[XmlNode], Seq[Acc]) =
+    children.flatMap { element =>
+      lazy val xsiType = element.singleGetAttr("xsi:type")
+      if (element.label != "element") Some(Left(element))
+      else if (isChildType(xsiType))
+        val (updatedElement, acc) = transform(element)
+        Left(updatedElement) :: acc.map(Right(_)).toList
+      else if (isGroupType(xsiType))
+        val (updatedChildren, acc) = diagramChildMapExtract(element.child)(transform)
+        Left(element updateChildren updatedChildren) :: acc.map(Right(_)).toList
+      else throw ArchiException(s"Found unknown xsi:type: $xsiType")
+    }.partitionMap(identity)
 
 
 class Archi private(
@@ -107,13 +125,15 @@ class Archi private(
         id -> Node(id, name, isProject)(sources, targets)
       }
       .toMap
-      .withDefault(key => throw ArchiException(s"Node with key $key element not found"))
+      .withDefault(key => throw ArchiException(s"Module with key $key not found"))
 
-  lazy val byName: Map[String, Node] = byId.values.map(node => node.name -> node).toMap
+  lazy val byName: Map[String, Node] =
+    byId.values.map(node => node.name -> node).toMap.withDefault(name => throw ArchiException(s"Module $name not found"))
 
   lazy val projects: List[Node] = byId.values.filter(_.isProject).toList
 
   implicit def nameToNode(name: String): Node = byName(name)
+
 
   private def getIds(elem: Elem): Seq[String] =
     (elem \ "@id").map(_.text) ++ elem.child.flatMap {
@@ -129,106 +149,113 @@ class Archi private(
       .map(id => f"$id%08x")
       .head
 
-  def renameModules(renameMap: Map[String, String]): Archi =
-    for (oldName, _) <- renameMap yield
-      if (!byName.contains(oldName))
-        throw ArchiException(s"Node $oldName not found")
 
-    val folders: Folders = Folders(xml)
-    val updatedChildren = folders.node.child.map {
-      case element: Elem if element.label == "element" =>
-        renameMap.get(element.singleGetAttr("name")).fold(element)
-          { newName => element.mapAttrs { case ("name", _) => newName } }
-      case other => other
+  private type OptChildren = Option[Seq[XmlNode]]
+  private def update(dependencies: OptChildren = None, nodes: OptChildren = None, diagrams: OptChildren = None): Archi =
+    val updateMap = {
+      dependencies.map("relations" -> _).toList :::
+        nodes.map("application" -> _).toList :::
+        diagrams.map("diagrams" -> _).toList
+    }.toMap
+    val updatedChildren = xml.child.map { folder =>
+      Option.when(folder.label == "folder")(folder.singleGetAttr("type"))
+        .flatMap(updateMap.get)
+        .fold(folder)(folder.updateChildren)
     }
-    val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
-    val updatedXml = folders.update(node = Some(updatedNodeFolder))
-    new Archi(updatedXml, fileBegin, random)
+    new Archi(xml.updateChildren(updatedChildren), fileBegin, random)
 
-  def addModules(names: Iterable[String]): Archi =
-    val folders: Folders = Folders(xml)
-    val updatedChildren = folders.node.child.dropRight(1) ++ names.flatMap { name =>
-      Text("\n    ") ::
-      <element xsi:type="archimate:ApplicationFunction" name={name} id={generateId}/> ::
-      Nil
-    } ++ Text("\n  ")
-    val updatedNodeFolder = folders.node.updateChildren(updatedChildren)
-    val updatedXml = folders.update(node = Some(updatedNodeFolder))
-    new Archi(updatedXml, fileBegin, random)
 
-  private type RemoveSC = (Seq[XmlNode], Seq[String])
+  private case class RemoveDepResult(dependencies: Seq[XmlNode], diagrams: Seq[XmlNode])
 
-  private def removeSCInChild(child: XmlNode, relationIds: Set[String]): RemoveSC = child.child.map { grandChild =>
-    val isSourceConnection = grandChild.label == "sourceConnection"
-    if (isSourceConnection && grandChild.singleGetAttr("xsi:type") != "archimate:Connection")
-      throw ArchiException(s"Found unknow xsi:type: $grandChild")
-    lazy val targetRelation = relationIds contains grandChild.singleGetAttr("archimateRelationship")
-    if (isSourceConnection && targetRelation) Right(grandChild.singleGetAttr("id"))
-    else Left(grandChild)
-  }.partitionMap(identity)
 
-  private def removeSCInElement(element: XmlNode, relationIds: Set[String]): RemoveSC = element.child.flatMap { child =>
-    lazy val (grandChildren, sourceConnectionIds) = child.singleGetAttr("xsi:type") match {
-      case "archimate:DiagramObject" => removeSCInChild(child, relationIds)
-      case "archimate:Group" => removeSCInElement(child, relationIds)
-      case _ => (child.child, Nil)
-    }
-    if (child.label != "child" || sourceConnectionIds.isEmpty) Left(child) :: Nil
-    else Left(child.updateChildren(grandChildren)) :: sourceConnectionIds.map(Right(_)).toList
-  }.partitionMap(identity)
-
-  private def removeSCInFolder(folder: XmlNode, relationIds: Set[String]): RemoveSC = folder.child.flatMap { element =>
-    lazy val (children, sourceConnectionIds) = removeSCInElement(element, relationIds)
-    val isElement = element.label == "element"
-    if (isElement && element.singleGetAttr("xsi:type") != "archimate:ArchimateDiagramModel")
-      throw ArchiException(s"Found unknown xsi:type: ${element.toString.substring(0, 10000 min element.length)}")
-    if (!isElement || sourceConnectionIds.isEmpty) Left(element) :: Nil
-    else Left(element.updateChildren(children)) :: sourceConnectionIds.map(Right(_)).toList
-  }.partitionMap(identity)
-
-  def removeDependencies(dependencies: Iterable[(Node, Node)]): Archi =
+  private def removeDependenciesInner(dependencies: Iterable[(Node, Node)], folders: Folders): RemoveDepResult =
     for (from, to) <- dependencies yield
-      if (!from.targets.contains(to)) throw ArchiException(s"No such dependency: ${from.name} -> ${to.name}")
+      if (!from.targets.contains(to))
+        throw ArchiException(s"No such dependency: ${from.name} -> ${to.name}")
     val idDependencies = dependencies.map((from, to) => (from.id, to.id)).toSet
-    val folders: Folders = Folders(xml)
 
-    val (dependencyElements, relationIdSeq) = folders.dependency.child.partitionMap { element =>
+    val (dependencyChildren, relationIdSeq) = folders.dependency.child.partitionMap { element =>
       val isTarget = element.label == "element" &&
         idDependencies.contains(element.singleGetAttr("source"), element.singleGetAttr("target"))
       if (isTarget) Right(element.singleGetAttr("id"))
       else Left(element)
     }
-    val dependencyFolderUpdated = folders.dependency.updateChildren(dependencyElements)
     val relationIds = relationIdSeq.toSet
 
-    val (diagramElements1, sourceConnectionIdSeq) = removeSCInFolder(folders.diagram, relationIds)
+    val (diagramChildren1, sourceConnectionIdSeq) = diagramChildMapExtract(folders.diagram.child) { child =>
+      val (updatedGrandChildren, sourceConnectionIds) = child.child.partitionMap { grandChild =>
+        if (grandChild.label != "sourceConnection")
+          Left(grandChild)
+        else if (grandChild.singleGetAttr("xsi:type") != "archimate:Connection")
+          throw ArchiException(s"Found unknown xsi:type: $grandChild")
+        else if (relationIds contains grandChild.singleGetAttr("archimateRelationship"))
+          Right(grandChild.singleGetAttr("id"))
+        else Left(grandChild)
+      }
+      child.updateChildren(updatedGrandChildren) -> sourceConnectionIds
+    }
     val sourceConnectionIds = sourceConnectionIdSeq.toSet
 
-    val diagramElements2 = diagramElements1.map { element =>
-      lazy val children = element.child.map { child =>
-        if (child.label != "child") child
-        else child.mapAttrs { case ("targetConnections", idStr) =>
-          idStr.split(' ').filterNot(sourceConnectionIds.contains).mkString(" ")
-        }
+    val diagramChildren2 = diagramChildMap(diagramChildren1) { child =>
+      child.mapAttrs { case ("targetConnections", idStr) =>
+        idStr.split(' ').filterNot(sourceConnectionIds.contains).mkString(" ")
       }
-      if (element.label == "element") element.updateChildren(children)
-      else element
     }
-    val diagramFolderUpdated = folders.diagram.updateChildren(diagramElements2)
 
-    val updatedXml = folders.update(dependency = Some(dependencyFolderUpdated), diagram = Some(diagramFolderUpdated))
-    new Archi(updatedXml, fileBegin, random)
+    RemoveDepResult(dependencyChildren, diagramChildren2)
+
+
+  def removeModules(modules: Iterable[Node]): Archi =
+    for module <- modules yield
+      if (!byId.contains(module.id))
+        throw ArchiException(s"Node ${module.name} not found")
+
+    val moduleIds = modules.map(_.id).toSet
+    val dependencies = modules
+      .flatMap { module => module.sources.map { _ -> module } ::: module.targets.map { module -> _ } }
+    
+    val folders = Folders(xml)
+    val updatedNodes = folders.node.child.filter {
+      case element: Elem => element.label != "element" || !moduleIds.contains(element.singleGetAttr("id"))
+      case other => true
+    }
+    val removedDeps = removeDependenciesInner(dependencies, folders)
+    val diagrams = diagramChildFilter(removedDeps.diagrams) { child =>
+      !moduleIds.contains(child.singleGetAttr("archimateElement"))
+    }
+
+    update(dependencies = Some(removedDeps.dependencies), nodes = Some(updatedNodes), diagrams = Some(diagrams))
+
+  def renameModules(renameList: Iterable[(Node, String)]): Archi =
+    val renameMap = renameList.map((node, newName) => node.name -> newName).toMap
+    val updated = Folders(xml).node.child.map {
+      case element: Elem if element.label == "element" =>
+        renameMap.get(element.singleGetAttr("name")).fold(element)
+          { newName => element.mapAttrs { case ("name", _) => newName } }
+      case other => other
+    }
+    update(nodes = Some(updated))
+
+  def addModules(names: Iterable[String]): Archi =
+    val updated = Folders(xml).node.child.dropRight(1) ++ names.flatMap { name =>
+      Text("\n    ") ::
+      <element xsi:type="archimate:ApplicationFunction" name={name} id={generateId}/> ::
+      Nil
+    } ++ Text("\n  ")
+    update(nodes = Some(updated))
+
+  def removeDependencies(dependencies: Iterable[(Node, Node)]): Archi =
+    val updated = removeDependenciesInner(dependencies, Folders(xml))
+    update(dependencies = Some(updated.dependencies), diagrams = Some(updated.diagrams))
 
   def addDependencies(dependencies: Iterable[(Node, Node)]): Archi =
-    val folders: Folders = Folders(xml)
-    val updatedChildren = folders.dependency.child.dropRight(1) ++ dependencies.toSeq.flatMap { case (from, to) =>
+    val updated = Folders(xml).dependency.child.dropRight(1) ++ dependencies.toSeq.flatMap { case (from, to) =>
       Text("\n    ") ::
       <element xsi:type="archimate:ServingRelationship" id={generateId} source={from.id} target={to.id}/> ::
       Nil
     } ++ Text("\n  ")
-    val updatedDependencyFolder = folders.dependency.updateChildren(updatedChildren)
-    val updatedXml = folders.update(dependency = Some(updatedDependencyFolder))
-    new Archi(updatedXml, fileBegin, random)
+    update(dependencies = Some(updated))
+
 
   override def toString: String =
     val orig = xml.toString

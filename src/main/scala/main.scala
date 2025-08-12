@@ -1,10 +1,14 @@
 import Printer.printError
+import scalaz.Memo
 
 import java.io.File
 import java.nio.file.{Files, Paths}
 import scala.annotation.tailrec
 import scala.language.implicitConversions
+import scala.reflect.ClassTag
 import scala.sys.process.Process
+import scala.util.Try
+import scala.util.matching.Regex
 
 
 private val archiDst = Paths.get("../c4enterprise/uses.archimate")
@@ -120,99 +124,15 @@ def printProjectsDiff(ignoreModuleName: String*): Unit =
       if (onlyDstModules.nonEmpty) println("  + " + onlyDstModules.map(_.name).sorted.mkString("\n    "))
 
 
-def rewrite(
-  toRenameModules: List[(String, String)] = Nil,
-  toAddModules: List[String] = Nil,
-  toRemoveDependencies: List[(String, String)] = Nil,
-  toAddDependencies: List[(String, String)] = Nil,
-  mainProject: Option[String] = None,
-): Unit =
-  srcArchi match { case archi =>
-    if (toRenameModules.nonEmpty) archi.renameModules(toRenameModules.toMap) else archi
-  }
-  match { case archi =>
-    if (toAddModules.nonEmpty) archi.addModules(toAddModules) else archi
-  }
-  match { case archi =>
-    val toRemoveIds = toRemoveDependencies.map((from, to) => archi.byName(from) -> archi.byName(to))
-    if (toRemoveIds.nonEmpty) archi.removeDependencies(toRemoveIds) else archi
-  }
-  match { case archi =>
-    val mainProjectDeps = mainProject.map { mainProject =>
-      val mainNode = archi.byName(mainProject)
-      archi.projects.filter(_ != mainNode).map(_ -> mainNode)
-    }.getOrElse(Nil)
-    val toAddIds = toAddDependencies.map((from, to) => archi.byName(from) -> archi.byName(to)) ::: mainProjectDeps
-    if (toAddIds.nonEmpty) archi.addDependencies(toAddIds) else archi
-  }
-  match { case archi =>
-    Files.writeString(archiDst, archi.toString)
-  }
-
-
-def parseRewrite(data: String): Unit =
-
-  abstract class AnyMode
-  abstract class Mode(val key: String) extends AnyMode
-  case object NoMode extends AnyMode
-  case object RenameModules extends Mode("renamemodules")
-  case object AddModules extends Mode("addmodules")
-  case object RemoveDeps extends Mode("removedependencies")
-  case object AddDeps extends Mode("adddependencies")
-  case object MainProject extends Mode("mainproject")
-
-  object ModeLine:
-    def unapply(line: String): Option[Mode] =
-      val key = line.filter(_.isLetter).toLowerCase
-      List(RenameModules, AddModules, RemoveDeps, AddDeps, MainProject).find(_.key == key)
-  object ArrowLine:
-    private val regex = "(.*?)\\s*->\\s*(.*?)".r
-    def unapply(line: String): Option[(String, String)] =
-      Some(line).collect { case regex(module1, module2) => module1 -> module2 }
-
-  type LS = List[String]
-  type LSS = List[(String, String)]
-  type OS = Option[String]
-
-  def setMainProj(oldMain: OS, newMain: String) =
-    oldMain.fold(Some(newMain))(_ => throw ArchiException("Only one main project can be specified"))
-  
-  @tailrec def parse(
-    preParsedLines: LS,
-    renameModules: LSS = Nil,
-    addModules: LS = Nil,
-    removeDeps: LSS = Nil,
-    addDeps: LSS = Nil,
-    mainProj: OS = None,
-    mode: AnyMode = NoMode,
-  ): (LSS, LS, LSS, LSS, OS) = (mode, preParsedLines) match
-    case (_, Nil)                               => (renameModules, addModules, removeDeps, addDeps, mainProj)
-    case (_, ModeLine(newMode) :: tail)         => parse(tail, renameModules, addModules, removeDeps, addDeps, mainProj, newMode)
-    case (RenameModules,ArrowLine(rename)::tail)=> parse(tail, rename :: renameModules, addModules, removeDeps, addDeps, mainProj, mode)
-    case (AddModules, module :: tail)           => parse(tail, renameModules, module :: addModules, removeDeps, addDeps, mainProj, mode)
-    case (RemoveDeps, ArrowLine(dep) :: tail)   => parse(tail, renameModules, addModules, dep :: removeDeps, addDeps, mainProj, mode)
-    case (AddDeps, ArrowLine(dep) :: tail)      => parse(tail, renameModules, addModules, removeDeps, dep :: addDeps, mainProj, mode)
-    case (MainProject, module :: tail)          => parse(tail, renameModules, addModules, removeDeps, addDeps, setMainProj(mainProj, module), mode)
-    case (_, invalid :: _)                      => throw ArchiException(s"Invalid line: $invalid")
-
-  val uncommentRegex = "(.*?)(//|#).*".r
-  val trimRegex = "\\s*(.*?)\\s*".r
-  val preParsedData = data.split('\n').toList
-    .map {
-      case uncommentRegex(uncommentedLine, _) => uncommentedLine
-      case noComment => noComment
-    }
-    .collect { case trimRegex(trimmed) if trimmed.nonEmpty => trimmed }
-
-  val (renameModules, addModules, removeDeps, addDeps, mainProject) = parse(preParsedData)
-  rewrite(renameModules, addModules, removeDeps, addDeps, mainProject)
-  printProjectsDiff(addModules.toArray*)
+def parseRewrite(dataPath: String): Unit =
+  val (rewritten, manuallyChanged) = Rewriter.parseRewrite(srcArchi, Files.readString(Paths get dataPath))
+  Files.writeString(archiDst, rewritten.toString)
+  printProjectsDiff(manuallyChanged*)
 
 
 def defaultCli(allArgs: String*): Unit =
   try
     val (archi, queryArgs) = allArgs match
-      case Nil => throw ArchiException("No args")
       case "src" :: tail => srcArchi -> tail
       case "dst" :: tail => dstArchi -> tail
       case _ => srcArchi -> allArgs
@@ -224,7 +144,7 @@ def defaultCli(allArgs: String*): Unit =
       case "module-diff" :: module1 :: module2 :: Nil => printModuleProjectDiff(module1, module2)
       case "module-path" :: module1 :: module2 :: Nil => Archi.getPath(module1, module2).foreach(println)
       case "get-invalid" :: Nil                       => printInvalid()
-      case "rewrite" :: dataPath :: Nil               => parseRewrite(Files.readString(Paths get dataPath))
+      case "rewrite" :: dataPath :: Nil               => parseRewrite(dataPath)
       case "module-diff" :: _ => throw ArchiException("module-diff needs exactly 2 arguments")
       case "module-path" :: _ => throw ArchiException("module-path needs exactly 2 arguments")
       case "get-invalid" :: _ => throw ArchiException("get-invalid doesn't need any extra arguments")
