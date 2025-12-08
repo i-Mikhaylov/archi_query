@@ -3,3 +3,4 @@ src/main/**/target/
 src/test
 .bsp
 .idea
+*.conf

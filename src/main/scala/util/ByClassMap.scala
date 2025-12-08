@@ -1,3 +1,5 @@
+package util
+
 import scala.collection.IterableOps
 import scala.reflect.ClassTag
 

@@ -1,3 +1,5 @@
+package archi
+
 
 
 case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):

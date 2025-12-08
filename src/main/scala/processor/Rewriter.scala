@@ -1,4 +1,8 @@
-import Modes.*
+package processor
+
+import archi.{Archi, ArchiException, Node}
+import processor.Modes.{AnyMode, NoMode, modeByKey, *}
+import util.allSealedObjects
 
 import scala.annotation.tailrec
 import scala.language.implicitConversions

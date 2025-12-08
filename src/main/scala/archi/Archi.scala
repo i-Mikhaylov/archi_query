@@ -1,10 +1,17 @@
-import DiagramChildOps.*
-import Printer.*
+package archi
+
+import archi.DiagramChildOps.*
+import util.Printer.printWarn
 
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Random, Try}
 import scala.xml.{Attribute, Elem, MetaData, NodeSeq, Null, Text, XML, Node as XmlNode}
+
+
+class ArchiException(message: String) extends Exception(message)
+object ArchiException:
+  def apply(message: String) = new ArchiException(message)
 
 
 private implicit class SingleElementSeq[T](seq: Seq[T]):
