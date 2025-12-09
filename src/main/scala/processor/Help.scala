@@ -19,6 +19,7 @@ enum Help(_message: String, withInputArg: Boolean = true):
   case moduleProjects     extends Help("[<modules>]")
   case getPath            extends Help("<module1> <module2>")
   case moduleProjectDiff  extends Help("<module1> <module2>")
+  case archiDepDiff       extends Help("<archi1> <archi2>", withInputArg = false)
   case archiDiff          extends Help("<archi1> <archi2>", withInputArg = false)
   case rewrite            extends Help("[-i <archi-input>] [-o <archi-output>] [-l <archiDiff-log>] -r <rules-input>",
     withInputArg = false)

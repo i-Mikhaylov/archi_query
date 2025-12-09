@@ -56,6 +56,10 @@ private def process(args: Seq[String])(func: PartialFunction[List[String], Itera
     processor.moduleProjectDiff(module1, module2)
 
 
+@main private def archiDepDiff(args: String*): Unit = process(args):
+  case ArchiInput(src) :: ArchiInput(dst) :: Nil => processor.archiDepDiff(src, dst)
+
+
 @main private def archiDiff(args: String*): Unit = process(args):
   case ArchiInput(src) :: ArchiInput(dst) :: Nil => processor.archiDiff(src, dst)
 

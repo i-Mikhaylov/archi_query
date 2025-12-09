@@ -29,6 +29,32 @@ def moduleProjectDiff(module1: Node, module2: Node): List[String] =
   process(module2, projects2, projects1)
 
 
+def archiDepDiff(srcArchi: Archi, dstArchi: Archi): List[String] =
+
+  def getDeps(archi: Archi) =
+    val deps = for
+      module <- archi.allModules
+      target <- module.targets
+    yield module -> target
+    deps.toSet
+
+  def deps2str(deps: Iterable[(Node, Node)], prefix: Char) = if deps.isEmpty then Nil else
+    val head :: tail = deps
+      .map { case (source, target) => source.name + " -> " + target.name }
+      .toList
+      .sorted : @unchecked
+    s"$prefix $head" :: tail.map("  " + _)
+
+  val srcDeps = getDeps(srcArchi)
+  val dstDeps = getDeps(dstArchi)
+
+  val onlySrcDeps = srcDeps.view.filterNot(dstDeps.contains)
+  val onlyDstDeps = dstDeps.view.filterNot(srcDeps.contains)
+
+  if onlySrcDeps.isEmpty && onlyDstDeps.isEmpty then "All deps are equal" :: Nil
+  else deps2str(onlySrcDeps, '-') ::: deps2str(onlyDstDeps, '+')
+
+
 def archiDiff(srcArchi: Archi, dstArchi: Archi, ignoreModuleNames: Set[String] = Set.empty): List[String] =
 
   def process(projectId: String) =
