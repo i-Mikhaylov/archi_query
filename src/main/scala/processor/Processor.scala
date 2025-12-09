@@ -1,7 +1,7 @@
 package processor
 
 import archi.{Archi, Node}
-import util.ListIf
+import util.{ColoredString, ListIf}
 
 import scala.language.implicitConversions
 
@@ -51,7 +51,7 @@ def archiDepDiff(srcArchi: Archi, dstArchi: Archi): List[String] =
   val onlySrcDeps = srcDeps.view.filterNot(dstDeps.contains)
   val onlyDstDeps = dstDeps.view.filterNot(srcDeps.contains)
 
-  if onlySrcDeps.isEmpty && onlyDstDeps.isEmpty then "All deps are equal" :: Nil
+  if onlySrcDeps.isEmpty && onlyDstDeps.isEmpty then "All deps are equal".colored(_.GREEN) :: Nil
   else deps2str(onlySrcDeps, '-') ::: deps2str(onlyDstDeps, '+')
 
 

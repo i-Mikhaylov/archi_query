@@ -1,10 +1,9 @@
 package archi
 
 import archi.DiagramChildOps.*
-import util.IdGenerator
+import util.{ColoredString, IdGenerator}
 
 import scala.annotation.tailrec
-import scala.io.AnsiColor
 import scala.language.implicitConversions
 import scala.xml.{Attribute, Elem, MetaData, NodeSeq, Null, Text, XML, Node as XmlNode}
 
@@ -110,10 +109,7 @@ class Archi private(
 
   lazy val byId: Map[String, Node] =
     def unknowXsiTypeWarning(xsiType: String): Unit =
-      Console.err.print(AnsiColor.YELLOW)
-      Console.err.print("Unknown application element xsi:type: ")
-      Console.err.println(xsiType)
-      Console.err.print(AnsiColor.RESET)
+      Console.err.println(s"Unknown application element xsi:type: $xsiType".colored(_.YELLOW))
     val folders: Folders = Folders(xml)
 
     val dependencies = (folders.dependency \ "element")
