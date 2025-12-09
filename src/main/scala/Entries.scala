@@ -1,9 +1,10 @@
 import archi.{Archi, ArchiException}
 import processor.{Help, Rewriter}
-import util.Printer
-import util.Printer.printError
 
+import java.io.{FileWriter, PrintStream}
 import java.nio.file.{Files, Paths}
+import scala.Console
+import scala.io.AnsiColor
 import scala.language.implicitConversions
 import scala.sys.process.{Process, stdin}
 import scala.util.CommandLineParser.FromString
@@ -20,48 +21,43 @@ private object ArchiInput:
   def unapply(path: String): Some[Archi] = Some(Archi(PathInput.get(path)))
 
 
-private def currentHelp: Help = Help valueOf Thread.currentThread.getStackTrace.last.getClassName
-private def invalidArgs: ArchiException = currentHelp.exception()
-private def invalidArgs(prefix: String): ArchiException = currentHelp.exception(prefix)
+private def currentHelp = Help valueOf Thread.currentThread.getStackTrace.last.getClassName
+private def invalidArgs = currentHelp.exception()
+private def invalidArgs(prefix: String) = currentHelp.exception(prefix)
 
 
-val _ = Thread.setDefaultUncaughtExceptionHandler {
-  case (_, error: ArchiException) => printError(error.getMessage)
-  case (_, error) => error.printStackTrace()
-}
+private def process(args: Seq[String])(func: PartialFunction[List[String], Iterable[Any]]): Unit =
+  val fullFunc = func.andThen { _.foreach(println) }.orElse { case _ => throw invalidArgs }
+  try fullFunc(args.toList)
+  catch case error: ArchiException => Console.err.println(error.getMessage)
 
 
 
-@main private def findModule(args: String*): Unit = args.toList match
-  case Nil => throw invalidArgs
+@main private def findModule(args: String*): Unit = process(args):
   case _ :: Nil => throw invalidArgs("No key specified to find")
   case ArchiInput(archi) :: nameSubstrings => processor.findModule(nameSubstrings)(archi)
 
 
-@main private def moduleProjects(args: String*): Unit = args.toList match
-  case Nil => throw invalidArgs
+@main private def moduleProjects(args: String*): Unit = process(args):
   case _ :: Nil => throw invalidArgs("No modules specified")
-  case ArchiInput(archi) :: moduleNames => processor.moduleProjects(moduleNames.map(archi.byName))
-
-
-@main private def moduleDiff(args: String*): Unit = args.toList match
-  case ArchiInput(archi) :: module1 :: module2 :: Nil =>
-    import archi.nameToNode
-    processor.moduleDiff(module1, module2)
-  case _ => throw invalidArgs
+  case ArchiInput(archi) :: moduleNames => moduleNames.map(archi.byName).flatMap(processor.moduleProjects)
 
 
 //noinspection AccessorLikeMethodIsUnit
-@main private def getPath(args: String*): Unit = args.toList match
+@main private def getPath(args: String*): Unit = process(args):
   case ArchiInput(archi) :: module1 :: module2 :: Nil =>
     import archi.nameToNode
-    Archi.getPath(module1, module2).foreach(println)
-  case _ => throw invalidArgs
+    Archi.getPath(module1, module2)
 
 
-@main private def projectDiff(args: String*): Unit = args.toList match
-  case ArchiInput(src) :: ArchiInput(dst) :: ignoreModules => processor.projectDiff(src, dst, ignoreModules.toSet)
-  case _ => throw invalidArgs
+@main private def moduleProjectDiff(args: String*): Unit = process(args):
+  case ArchiInput(archi) :: module1 :: module2 :: Nil =>
+    import archi.nameToNode
+    processor.moduleProjectDiff(module1, module2)
+
+
+@main private def archiDiff(args: String*): Unit = process(args):
+  case ArchiInput(src) :: ArchiInput(dst) :: Nil => processor.archiDiff(src, dst)
 
 
 @main private def rewrite(args: String*): Unit =
@@ -77,28 +73,29 @@ val _ = Thread.setDefaultUncaughtExceptionHandler {
     }
     .withDefaultValue("-")
 
-  def writeOutput(path: String, defaultPrint: String => Unit) =
-    if path == "-" then defaultPrint(_)
-    else Files.writeString(Paths get path, _)
-
   val srcArchi = ArchiInput.unapply(argMap("-i")).value
   val rules = PathInput get argMap.getOrElse("-r", throw invalidArgs)
-  val printOutput: String => Unit = argMap("-o") match
-    case "-" => println
-    case path => Files.writeString(Paths get path, _)
-  val printInfo: String => Unit = argMap("-i") match
-    case "-" => Printer.printInfo
-    case path => Files.writeString(Paths get path, _)
-
+  val printOutput: String => Unit =
+    argMap("-o") match      //Can be called only once
+      case "-" => Console.out.println
+      case path => Files.writeString(Paths get path, _)
   val (rewritten, manuallyChanged) = Rewriter.parseRewrite(srcArchi, rules)
   printOutput(rewritten.toString)
-  processor.projectDiff(srcArchi, rewritten, manuallyChanged.toSet)
+
+  lazy val infoOut = argMap.get("-l") match
+    case None => Console.err.print(AnsiColor.WHITE); Console.err
+    case Some("-") => Console.out
+    case Some(path) => new FileWriter(path)
+  for line <- processor.archiDiff(srcArchi, rewritten, manuallyChanged.toSet) do
+    infoOut.append(line).append(System.lineSeparator)
+  infoOut match
+    case file: FileWriter => file.close()
+    case print => print.append(AnsiColor.RESET)
 
 
-@main private def help(args: String*): Unit =
-  def getHelp(name: String) =
+@main private def help(args: String*): Unit = process(args):
+  case Nil => Help.values
+  case names => for name <- names yield
     Try(Help.valueOf(name))
       .recover { case _ => throw ArchiException(s"Invalid name: $name") }
       .get
-  for help <- if args.isEmpty then Help.values.toSeq else args.map(getHelp)
-  do println(help.message)

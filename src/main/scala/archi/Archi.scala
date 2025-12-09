@@ -1,9 +1,9 @@
 package archi
 
 import archi.DiagramChildOps.*
-import util.Printer.printWarn
 
 import scala.annotation.tailrec
+import scala.io.AnsiColor
 import scala.language.implicitConversions
 import scala.util.{Random, Try}
 import scala.xml.{Attribute, Elem, MetaData, NodeSeq, Null, Text, XML, Node as XmlNode}
@@ -110,7 +110,11 @@ class Archi private(
 ):
 
   lazy val byId: Map[String, Node] =
-    def unknowXsiTypeWarning(xsiType: String): Unit = printWarn(s"Unknown application element xsi:type: $xsiType")
+    def unknowXsiTypeWarning(xsiType: String): Unit =
+      Console.err.print(AnsiColor.YELLOW)
+      Console.err.print("Unknown application element xsi:type: ")
+      Console.err.println(xsiType)
+      Console.err.print(AnsiColor.RESET)
     val folders: Folders = Folders(xml)
 
     val dependencies = (folders.dependency \ "element")
@@ -142,10 +146,12 @@ class Archi private(
       .toMap
       .withDefault(key => throw ArchiException(s"Module with key $key not found"))
 
-  lazy val byName: Map[String, Node] =
-    byId.values.map(node => node.name -> node).toMap.withDefault(name => throw ArchiException(s"Module $name not found"))
+  lazy val allModules: Iterable[Node] = byId.values
 
-  lazy val projects: List[Node] = byId.values.filter(_.isProject).toList
+  lazy val byName: Map[String, Node] =
+    allModules.map(node => node.name -> node).toMap.withDefault(name => throw ArchiException(s"Module $name not found"))
+
+  lazy val projects: List[Node] = allModules.filter(_.isProject).toList
 
   implicit def nameToNode(name: String): Node = byName(name)
 

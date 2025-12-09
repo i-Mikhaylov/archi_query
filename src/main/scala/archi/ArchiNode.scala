@@ -4,7 +4,9 @@ package archi
 
 case class Node(id: String, name: String, isProject: Boolean)(_sources: => List[Node], _targets: => List[Node]):
   override def hashCode: Int = id.hashCode
-  override def equals(obj: Any): Boolean = Some(obj).collect { case node: Node => node }.exists(_.id == id)
+  override def equals(obj: Any): Boolean = obj match
+    case node: Node => node.id == id
+    case _ => false
 
   def sources: List[Node] = _sources
   def targets: List[Node] = _targets
