@@ -1,11 +1,11 @@
 package archi
 
 import archi.DiagramChildOps.*
+import util.IdGenerator
 
 import scala.annotation.tailrec
 import scala.io.AnsiColor
 import scala.language.implicitConversions
-import scala.util.{Random, Try}
 import scala.xml.{Attribute, Elem, MetaData, NodeSeq, Null, Text, XML, Node as XmlNode}
 
 
@@ -106,7 +106,6 @@ private object DiagramChildOps:
 class Archi private(
   xml: Elem,
   fileBegin: String,
-  random: Random = new Random(123456789123456789L),
 ):
 
   lazy val byId: Map[String, Node] =
@@ -161,14 +160,7 @@ class Archi private(
       case elem: Elem => getIds(elem)
       case _ => Nil
     }
-  private lazy val existingIds: Set[Int] = getIds(xml)
-    .flatMap { id => Try(Integer.parseUnsignedInt(id, 16)).toOption }
-    .toSet
-  private def generateId =
-    LazyList.continually(random.nextInt)
-      .dropWhile(existingIds.contains)
-      .map(id => f"$id%08x")
-      .head
+  private lazy val idGenerator = IdGenerator(xml, getIds(xml))
 
 
   private type OptChildren = Option[Seq[XmlNode]]
@@ -183,7 +175,7 @@ class Archi private(
         .flatMap(updateMap.get)
         .fold(folder)(folder.updateChildren)
     }
-    new Archi(xml.updateChildren(updatedChildren), fileBegin, random)
+    new Archi(xml.updateChildren(updatedChildren), fileBegin)
 
 
   private case class RemoveDepResult(dependencies: Seq[XmlNode], diagrams: Seq[XmlNode])
@@ -258,7 +250,7 @@ class Archi private(
   def addModules(names: Iterable[String]): Archi =
     val updated = Folders(xml).node.child.dropRight(1) ++ names.flatMap { name =>
       Text("\n    ") ::
-      <element xsi:type="archimate:ApplicationFunction" name={name} id={generateId}/> ::
+      <element xsi:type="archimate:ApplicationFunction" name={name} id={idGenerator.generate}/> ::
       Nil
     } ++ Text("\n  ")
     update(nodes = Some(updated))
@@ -270,7 +262,7 @@ class Archi private(
   def addDependencies(dependencies: Iterable[(Node, Node)]): Archi =
     val updated = Folders(xml).dependency.child.dropRight(1) ++ dependencies.toSeq.flatMap { case (from, to) =>
       Text("\n    ") ::
-      <element xsi:type="archimate:ServingRelationship" id={generateId} source={from.id} target={to.id}/> ::
+      <element xsi:type="archimate:ServingRelationship" id={idGenerator.generate} source={from.id} target={to.id}/> ::
       Nil
     } ++ Text("\n  ")
     update(dependencies = Some(updated))
