@@ -9,6 +9,7 @@ import scala.language.implicitConversions
 import scala.sys.process.{Process, stdin}
 import scala.util.CommandLineParser.FromString
 import scala.util.Try
+import util.ColoredString
 
 
 private object PathInput:
@@ -57,11 +58,15 @@ private def process(args: Seq[String])(func: PartialFunction[List[String], Itera
 
 
 @main private def archiDepDiff(args: String*): Unit = process(args):
-  case ArchiInput(src) :: ArchiInput(dst) :: Nil => processor.archiDepDiff(src, dst)
+  case ArchiInput(src) :: ArchiInput(dst) :: Nil =>
+    val lines = processor.archiDepDiff(src, dst)
+    if lines.nonEmpty then lines else "All deps are equal".colored(_.GREEN) :: Nil
 
 
 @main private def archiDiff(args: String*): Unit = process(args):
-  case ArchiInput(src) :: ArchiInput(dst) :: Nil => processor.archiDiff(src, dst)
+  case ArchiInput(src) :: ArchiInput(dst) :: Nil =>
+    val lines = processor.archiDiff(src, dst)
+    if lines.nonEmpty then lines else "All projects' contents are equal".colored(_.GREEN) :: Nil
 
 
 @main private def rewrite(args: String*): Unit =
